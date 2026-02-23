@@ -48,7 +48,10 @@ class CountryPickerViewController: UIViewController {
 
     private var countries: [Country] = Locale.Region.isoRegions.compactMap {
         let code = $0.identifier
-        guard let name = Locale.current.localizedString(forRegionCode: code) else { return nil }
+        // Ensure the code is exactly 2 letters to filter out 3-digit regions like "002" (Africa) 
+        // which break the unicode flag emoji conversion.
+        guard code.count == 2, 
+              let name = Locale.current.localizedString(forRegionCode: code) else { return nil }
         return Country(name: name, code: code)
     }.sorted { $0.name < $1.name }
 
