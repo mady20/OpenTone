@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		0CBCAB422F4370B500CC26D6 /* IQKeyboardManagerSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 0CBCAB412F4370B500CC26D6 /* IQKeyboardManagerSwift */; };
+		9813ABB52F4C164A00B2CA3B /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 9813ABB42F4C164A00B2CA3B /* Supabase */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -40,6 +41,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				9813ABB52F4C164A00B2CA3B /* Supabase in Frameworks */,
 				0CBCAB422F4370B500CC26D6 /* IQKeyboardManagerSwift in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -84,6 +86,7 @@
 			name = OpenTone;
 			packageProductDependencies = (
 				0CBCAB412F4370B500CC26D6 /* IQKeyboardManagerSwift */,
+				9813ABB42F4C164A00B2CA3B /* Supabase */,
 			);
 			productName = OpenTone;
 			productReference = 3FBEA97B2ED55D6300788555 /* OpenTone.app */;
@@ -116,6 +119,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				0C63338D2F43706100E698DC /* XCRemoteSwiftPackageReference "IQKeyboardManager" */,
+				9813ABB32F4C14D000B2CA3B /* XCRemoteSwiftPackageReference "supabase-swift" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 3FAE41E82EC43B5E00FADCC1;
@@ -376,6 +380,14 @@
 				minimumVersion = 8.0.2;
 			};
 		};
+		9813ABB32F4C14D000B2CA3B /* XCRemoteSwiftPackageReference "supabase-swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/supabase/supabase-swift";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.5.1;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -383,6 +395,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 0C63338D2F43706100E698DC /* XCRemoteSwiftPackageReference "IQKeyboardManager" */;
 			productName = IQKeyboardManagerSwift;
+		};
+		9813ABB42F4C164A00B2CA3B /* Supabase */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 9813ABB32F4C14D000B2CA3B /* XCRemoteSwiftPackageReference "supabase-swift" */;
+			productName = Supabase;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
