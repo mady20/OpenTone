@@ -29,7 +29,7 @@ class HomeCollectionViewController: UICollectionViewController {
 
     /// Whether we have any saved session (jam or roleplay) to continue. At most 1.
     private var hasSavedSession: Bool {
-        savedJamSession != nil || savedRoleplaySession != nil
+        savedJamSession != nil || (savedRoleplaySession != nil && savedRoleplayScenario != nil)
     }
     
     

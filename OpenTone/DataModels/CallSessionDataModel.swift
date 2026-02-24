@@ -24,17 +24,21 @@ class CallSessionDataModel {
            let end = finished.endedAt {
 
             let durationSeconds = Int(end.timeIntervalSince(start))
-            let durationMinutes = max(1, durationSeconds / 60)
+            
+            // Only log if they actually stayed in the call longer than 5 seconds
+            if durationSeconds > 5 {
+                let durationMinutes = max(1, durationSeconds / 60)
 
-            HistoryDataModel.shared.logActivity(
-                type: .call,
-                title: "Call Session",
-                topic: "Conversation",
-                duration: durationMinutes,
-                imageURL: "call_icon",
-                xpEarned: 8,
-                isCompleted: true
-            )
+                HistoryDataModel.shared.logActivity(
+                    type: .call,
+                    title: "Call Session",
+                    topic: "Conversation",
+                    duration: durationMinutes,
+                    imageURL: "call_icon",
+                    xpEarned: 8,
+                    isCompleted: true
+                )
+            }
         }
 
         activeSession = nil

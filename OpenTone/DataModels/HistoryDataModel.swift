@@ -87,7 +87,7 @@ class HistoryDataModel {
 
     private func loadHistory() async {
         guard let userId = UserDataModel.shared.getCurrentUser()?.id else {
-            activities = loadSampleActivities()
+            activities = []
             return
         }
 
@@ -100,15 +100,11 @@ class HistoryDataModel {
                 .execute()
                 .value
             activities = rows.map { $0.toActivity() }
-
-            if activities.isEmpty {
-                activities = loadSampleActivities()
-            }
             
             NotificationCenter.default.post(name: HistoryDataModel.historyDataLoadedNotification, object: nil)
         } catch {
             print("❌ Failed to load activities: \(error.localizedDescription)")
-            activities = loadSampleActivities()
+            activities = []
             NotificationCenter.default.post(name: HistoryDataModel.historyDataLoadedNotification, object: nil)
         }
     }

@@ -4,6 +4,7 @@ import Foundation
 
 var scenarios: [RoleplayScenario] = [
     RoleplayScenario(
+        id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
         title: "Grocery Shopping",
         description: "Practice asking for items, prices, and payment at a grocery store.",
         imageURL: "GroceryShopping",
@@ -124,6 +125,7 @@ var scenarios: [RoleplayScenario] = [
         ]
     ),
     RoleplayScenario(
+        id: UUID(uuidString: "22222222-2222-2222-2222-222222222222")!,
         title: "Making Friends",
         description: "Practice starting conversations, finding common interests, and building friendships.",
         imageURL: "MakingFriends",
@@ -245,6 +247,7 @@ var scenarios: [RoleplayScenario] = [
     )
 ,
     RoleplayScenario(
+        id: UUID(uuidString: "33333333-3333-3333-3333-333333333333")!,
         title: "Airport Check-in",
         description: "Practice check-in conversation at an airport counter.",
         imageURL: "AirportCheck-in",
@@ -388,6 +391,7 @@ var scenarios: [RoleplayScenario] = [
     )
 ,
     RoleplayScenario(
+        id: UUID(uuidString: "44444444-4444-4444-4444-444444444444")!,
         title: "Ordering Food",
         description: "Practice ordering food at a restaurant.",
         imageURL: "OrderingFood",
@@ -498,6 +502,7 @@ var scenarios: [RoleplayScenario] = [
     )
 ,
     RoleplayScenario(
+        id: UUID(uuidString: "55555555-5555-5555-5555-555555555555")!,
         title: "Job Interview",
         description: "Practice answering common interview questions.",
         imageURL: "JobInterview",
@@ -596,6 +601,7 @@ var scenarios: [RoleplayScenario] = [
         ]
     ),
     RoleplayScenario(
+        id: UUID(uuidString: "66666666-6666-6666-6666-666666666666")!,
         title: "Hotel Booking",
         description: "Practice booking a hotel room, asking about facilities, pricing, and check-in details.",
         imageURL: "HotelBooking",
