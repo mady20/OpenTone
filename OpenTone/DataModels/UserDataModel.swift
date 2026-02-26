@@ -13,11 +13,16 @@ final class UserDataModel {
     /// Key for persisting the current user's UUID across launches.
     private let currentUserIDKey = "currentUserID"
 
+    private(set) var isLoaded = false
+
     private init() {
         // Kick off an async load — callers should observe `allUsers` after this completes.
         Task { @MainActor in
             await loadAllUsersFromSupabase()
             await restoreCurrentUser()
+            self.isLoaded = true
+            SessionManager.shared.refreshSession()
+            NotificationCenter.default.post(name: NSNotification.Name("UserDataModelLoaded"), object: nil)
         }
     }
 
@@ -122,11 +127,7 @@ final class UserDataModel {
         updateCurrentUser(user)
     }
 
-    func addCallRecordID(_ id: UUID) {
-        // No longer stored on user — call_records table has user_id FK.
-        // Keep SessionManager refresh for UI updates.
-        SessionManager.shared.refreshSession()
-    }
+
 
     func addRoleplayID(_ id: UUID) {
         SessionManager.shared.refreshSession()
@@ -286,7 +287,6 @@ final class UserDataModel {
                 avatar: "pp1",
                 streak: Streak(commitment: 10, currentCount: 5, longestCount: 8, lastActiveDate: Date()),
                 lastSeen: Date().addingTimeInterval(-120),
-                callRecordIDs: [],
                 roleplayIDs: [],
                 jamSessionIDs: [],
                 friends: [],
@@ -311,7 +311,6 @@ final class UserDataModel {
                 avatar: "pp2",
                 streak: Streak(commitment: 15, currentCount: 3, longestCount: 5, lastActiveDate: Date().addingTimeInterval(-86400)),
                 lastSeen: Date(),
-                callRecordIDs: [],
                 roleplayIDs: [],
                 jamSessionIDs: [],
                 friends: [],

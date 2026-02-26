@@ -22,6 +22,11 @@ final class TwoMinuteJamViewController: UIViewController, UITabBarControllerDele
         super.viewDidLoad()
         applyDarkModeStyles()
         setupProfileBarButton()
+
+        // Respond to light/dark mode changes (iOS 17+ API)
+        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (self: TwoMinuteJamViewController, _) in
+            self.applyDarkModeStyles()
+        }
     }
 
     private func setupProfileBarButton() {
@@ -40,13 +45,6 @@ final class TwoMinuteJamViewController: UIViewController, UITabBarControllerDele
         guard let profileNav = storyboard.instantiateInitialViewController() as? UINavigationController,
               let profileVC = profileNav.viewControllers.first else { return }
         navigationController?.pushViewController(profileVC, animated: true)
-    }
-
-    override func traitCollectionDidChange(_ previousTraitCollection: UITraitCollection?) {
-        super.traitCollectionDidChange(previousTraitCollection)
-        if traitCollection.hasDifferentColorAppearance(comparedTo: previousTraitCollection) {
-            applyDarkModeStyles()
-        }
     }
 
     private func applyDarkModeStyles() {

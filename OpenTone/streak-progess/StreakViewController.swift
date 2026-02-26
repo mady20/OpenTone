@@ -32,8 +32,6 @@ class StreakViewController: UIViewController {
                 activityType = .jam
             case "person.2.fill", "person.fill":
                 activityType = .roleplay
-            case "phone.fill":
-                activityType = .call
             default:
                 activityType = nil
             }

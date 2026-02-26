@@ -6,46 +6,24 @@ final class ProfileStoryboardCollectionViewController: UICollectionViewControlle
         SessionManager.shared.currentUser
     }
 
-    /// The peer user to display in call modes. Falls back to sessionUser.
-    var peerUser: User?
-
     /// Returns the user to display — peerUser in call mode, otherwise sessionUser.
     private var displayUser: User? {
-        (isComingFromCall || isInCall) ? (peerUser ?? sessionUser) : sessionUser
+        sessionUser
     }
 
-    private var callTimer: Timer?
-    private var callStartDate: Date?
-
-
-    
     var titleText = "Profile"
-    
-    var isComingFromCall = false
-    
-    var isInCall = false
 
     private let achievements = [
         ("First Call", "Completed your first call"),
         ("Consistency", "7-day streak achieved"),
         ("Explorer", "Tried 5 different topics")
     ]
-    private var aiSuggestions: [String] = []
-    private var isLoadingSuggestions = false
-    private let fallbackSuggestions = [
-        "What do you enjoy doing on weekends?",
-        "Have you watched any good shows lately?",
-        "What kind of music do you like?",
-        "Where would you love to travel someday?"
-    ]
-
 
     private enum Section: Int, CaseIterable {
         case profile
         case interests
         case stats
         case achievements
-        case suggestedQuestions
         case actions
     }
 
@@ -55,12 +33,6 @@ final class ProfileStoryboardCollectionViewController: UICollectionViewControlle
         title = titleText
         collectionView.backgroundColor = AppColors.screenBackground
         collectionView.collectionViewLayout = createLayout()
-        
-        collectionView.register(
-            SuggestedQuestionsHeaderView.self,
-            forSupplementaryViewOfKind: UICollectionView.elementKindSectionHeader,
-            withReuseIdentifier: SuggestedQuestionsHeaderView.reuseIdentifier
-        )
 
         setupNavigationBarButtons()
         
@@ -71,51 +43,9 @@ final class ProfileStoryboardCollectionViewController: UICollectionViewControlle
         ) { [weak self] _ in
             self?.collectionView.reloadData()
         }
-
-        if isComingFromCall || isInCall {
-            generateAIQuestions()
-        }
-    }
-
-    private func generateAIQuestions() {
-        guard let peer = peerUser else {
-            aiSuggestions = fallbackSuggestions
-            return
-        }
-
-        let interests = peer.interests?.map { $0.title } ?? []
-        guard !interests.isEmpty, GeminiAPIKeyManager.shared.hasAPIKey else {
-            aiSuggestions = fallbackSuggestions
-            return
-        }
-
-        isLoadingSuggestions = true
-        collectionView.reloadData()
-
-        Task {
-            do {
-                let questions = try await GeminiService.shared.generateQuestions(
-                    for: interests,
-                    peerName: peer.name
-                )
-                await MainActor.run {
-                    self.aiSuggestions = questions.isEmpty ? self.fallbackSuggestions : questions
-                    self.isLoadingSuggestions = false
-                    self.collectionView.reloadSections(IndexSet(integer: Section.suggestedQuestions.rawValue))
-                }
-            } catch {
-                await MainActor.run {
-                    self.aiSuggestions = self.fallbackSuggestions
-                    self.isLoadingSuggestions = false
-                    self.collectionView.reloadSections(IndexSet(integer: Section.suggestedQuestions.rawValue))
-                }
-            }
-        }
     }
 
     private func setupNavigationBarButtons() {
-        // Only show settings & edit in normal profile mode (not during calls)
-        guard !isComingFromCall && !isInCall else { return }
 
         let settingsButton = UIBarButtonItem(
             image: UIImage(systemName: "gearshape"),
@@ -156,37 +86,6 @@ final class ProfileStoryboardCollectionViewController: UICollectionViewControlle
 
         guard let section = Section(rawValue: section) else { return 0 }
         
-        if isInCall {
-            switch section {
-            case .profile:
-                return 1
-            case .interests:
-                return 0
-            case .suggestedQuestions:
-                return isLoadingSuggestions ? 0 : aiSuggestions.count
-            case .actions:
-                return 1
-            default:
-                return 0
-            }
-        }
-        
-        if isComingFromCall {
-            switch section {
-            case .profile:
-                return 1
-            case .interests:
-                return displayUser?.interests?.count ?? 0
-            case .stats:
-                return 1
-            case .suggestedQuestions:
-                return isLoadingSuggestions ? 0 : aiSuggestions.count
-            case .actions:
-                return 1
-            default:
-                return 0
-            }
-        }
         switch section {
         case .profile:
             return 1
@@ -198,8 +97,6 @@ final class ProfileStoryboardCollectionViewController: UICollectionViewControlle
             return 0
         case .actions:
             return displayUser != nil ? 1 : 0
-        default:
-            return 0
         }
     }
 
@@ -228,8 +125,7 @@ final class ProfileStoryboardCollectionViewController: UICollectionViewControlle
                 level: displayUser?.englishLevel?.rawValue.capitalized ?? "",
                 bio: displayUser?.bio ?? "",
                 streakText: "🔥 \(displayUser?.streak?.currentCount ?? 0) day streak",
-                avatar: Self.loadAvatar(named: displayUser?.avatar),
-                isPeer: isComingFromCall || isInCall
+                avatar: Self.loadAvatar(named: displayUser?.avatar)
             )
 
             return cell
@@ -255,11 +151,10 @@ final class ProfileStoryboardCollectionViewController: UICollectionViewControlle
 
             let isCurrentUser = displayUser?.id == SessionManager.shared.currentUser?.id
             
-            let callsCount = isCurrentUser ? HistoryDataModel.shared.searchHistory(by: .call).count : (displayUser?.callRecordIDs.count ?? 0)
             let roleplaysCount = isCurrentUser ? HistoryDataModel.shared.searchHistory(by: .roleplay).count : (displayUser?.roleplayIDs.count ?? 0)
             let jamsCount = isCurrentUser ? HistoryDataModel.shared.searchHistory(by: .jam).count : (displayUser?.jamSessionIDs.count ?? 0)
 
-            cell.configure(calls: callsCount, roleplays: roleplaysCount, jams: jamsCount)
+            cell.configure(roleplays: roleplaysCount, jams: jamsCount)
             return cell
 
         case .achievements:
@@ -271,16 +166,7 @@ final class ProfileStoryboardCollectionViewController: UICollectionViewControlle
             let achievement = achievements[indexPath.item]
             cell.configure(title: achievement.0, subtitle: achievement.1)
             return cell
-        
-        case .suggestedQuestions:
-            let cell = collectionView.dequeueReusableCell(
-                withReuseIdentifier: "SuggestionCallCell",
-                for: indexPath
-            ) as! SuggestionCallCell
 
-            let question = aiSuggestions[indexPath.item]
-            cell.configure(title: question, icon: UIImage(systemName: "lightbulb.fill"))
-            return cell
 
         case .actions:
             let cell = collectionView.dequeueReusableCell(
@@ -288,42 +174,16 @@ final class ProfileStoryboardCollectionViewController: UICollectionViewControlle
                 for: indexPath
             ) as! ProfileActionsCell
         
-            
-            if isInCall {
-                cell.configure(mode: .inCall, timerText: "00:00")
-                cell.logoutButton.addTarget(
-                    self,
-                    action: #selector(didTapEndCall),
-                    for: .touchUpInside
-                )
+            cell.configure(mode: .normal)
 
-            } else if isComingFromCall {
-                cell.configure(mode: .postCall)
+            // Settings is now in the nav bar, so hide the settings button
+            cell.settingsButton.isHidden = true
 
-                cell.settingsButton.addTarget(
-                    self,
-                    action: #selector(didTapStartCall),
-                    for: .touchUpInside
-                )
-
-                cell.logoutButton.addTarget(
-                    self,
-                    action: #selector(didTapSearchAgain),
-                    for: .touchUpInside
-                )
-
-            } else {
-                cell.configure(mode: .normal)
-
-                // Settings is now in the nav bar, so hide the settings button
-                cell.settingsButton.isHidden = true
-
-                cell.logoutButton.addTarget(
-                    self,
-                    action: #selector(didTapLogout),
-                    for: .touchUpInside
-                )
-            }
+            cell.logoutButton.addTarget(
+                self,
+                action: #selector(didTapLogout),
+                for: .touchUpInside
+            )
 
             return cell
 
@@ -342,212 +202,16 @@ final class ProfileStoryboardCollectionViewController: UICollectionViewControlle
     }
 
     
-    override func collectionView(
-        _ collectionView: UICollectionView,
-        viewForSupplementaryElementOfKind kind: String,
-        at indexPath: IndexPath
-    ) -> UICollectionReusableView {
-
-        guard kind == UICollectionView.elementKindSectionHeader else {
-            return UICollectionReusableView()
-        }
-
-        let section = Section(rawValue: indexPath.section)
-   
-            switch section {
-            case .suggestedQuestions:
-                return collectionView.dequeueReusableSupplementaryView(
-                    ofKind: kind,
-                    withReuseIdentifier: SuggestedQuestionsHeaderView.reuseIdentifier,
-                    for: indexPath
-                )
-
-            default:
-                return UICollectionReusableView()
-
-            }
-        
-       
-    }
-
     override func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         guard let section = Section(rawValue: indexPath.section) else { return }
 
         // Tapping the profile card in normal mode opens the profile editor
-        if section == .profile && !isInCall && !isComingFromCall {
+        if section == .profile {
             didTapEditProfile()
         }
     }
 
     
-    @objc private func didTapStartCall() {
-        setTabBar(hidden: true)
-
-        UIView.animate(withDuration: 0.2, animations: {
-            self.view.alpha = 0.98
-        })
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
-            self.isInCall = true
-            self.isComingFromCall = false
-
-            self.title = "In Call"
-            self.navigationItem.largeTitleDisplayMode = .never
-
-            self.startCallTimer()
-
-            UIView.transition(
-                with: self.collectionView,
-                duration: 0.3,
-                options: [.transitionCrossDissolve],
-                animations: {
-                    self.collectionView.reloadData()
-                    self.collectionView.collectionViewLayout.invalidateLayout()
-                }
-            )
-
-        }
-    }
-
-    
-    @objc private func updateCallTimer() {
-        guard let start = callStartDate else { return }
-
-        let elapsed = Int(Date().timeIntervalSince(start))
-        let minutes = elapsed / 60
-        let seconds = elapsed % 60
-
-        let formatted = String(format: "%02d:%02d", minutes, seconds)
-
-        updateTimerLabel(formatted)
-    }
-    
-    private func updateTimerLabel(_ text: String) {
-        let indexPath = IndexPath(
-            item: 0,
-            section: Section.actions.rawValue
-        )
-
-        guard
-            let cell = collectionView.cellForItem(at: indexPath)
-                as? ProfileActionsCell
-        else { return }
-        
-        cell.updateTimer(text: text)
-
-    }
-
-
-    
-    private func startCallTimer() {
-        callStartDate = Date()
-
-        callTimer?.invalidate()
-        callTimer = Timer.scheduledTimer(
-            timeInterval: 1,
-            target: self,
-            selector: #selector(updateCallTimer),
-            userInfo: nil,
-            repeats: true
-        )
-    }
-
-    private func stopCallTimer() {
-        callTimer?.invalidate()
-        callTimer = nil
-        callStartDate = nil
-    }
-
-
-    override func viewWillDisappear(_ animated: Bool) {
-        super.viewWillDisappear(animated)
-
-        if isInCall {
-            stopCallTimer()
-        }
-    }
-
-    
-    override func viewWillAppear(_ animated: Bool) {
-        super.viewWillAppear(animated)
-
-        navigationController?.navigationBar.prefersLargeTitles = false
-        navigationItem.largeTitleDisplayMode = .never
-
-        // Refresh user data so updated session counts are picked up
-        SessionManager.shared.refreshSession()
-        collectionView.reloadData()
-    }
-
-
-    func goToEndCallChoice(){
-        let storyboard = UIStoryboard(name: "CallStoryBoard", bundle: nil)
-        let vc = storyboard.instantiateViewController(withIdentifier: "EndCall") as! CallEndedViewController
-        
-        navigationController?.pushViewController(vc, animated: true)
-    }
-    
-    @objc private func didTapEndCall() {
-        stopCallTimer()
-
-        // --- Record the call ---
-        let callDuration: TimeInterval
-        if let start = callStartDate {
-            callDuration = Date().timeIntervalSince(start)
-        } else {
-            callDuration = 0
-        }
-
-        // End the active CallSession (logs to HistoryDataModel)
-        CallSessionDataModel.shared.endSession()
-
-        // Create a CallRecord for the peer
-        if let peer = peerUser {
-            let record = CallRecord(
-                participantID: peer.id,
-                participantName: peer.name,
-                participantAvatarURL: peer.avatar,
-                participantBio: peer.bio,
-                participantInterests: nil,
-                callDate: Date(),
-                duration: callDuration,
-                userStatus: .offline
-            )
-            CallRecordDataModel.shared.addCallRecord(record)
-            UserDataModel.shared.addCallRecordID(record.id)
-        }
-
-        // Log to streak/progress
-        let durationMinutes = max(1, Int(callDuration) / 60)
-        SessionProgressManager.shared.markCompleted(.oneToOne, topic: "Conversation", actualDurationMinutes: durationMinutes)
-
-        isInCall = false
-        isComingFromCall = true
-
-        title = titleText
-
-        setTabBar(hidden: false)
-        collectionView.reloadData()
-        collectionView.collectionViewLayout.invalidateLayout()
-
-        goToEndCallChoice()
-    }
-
-
-    
-    @objc private func didTapSearchAgain() {
-        // Pop back to CallSetupViewController so the user can search for a new peer
-        guard let navController = navigationController else { return }
-        for vc in navController.viewControllers {
-            if vc is CallSetupViewController {
-                navController.popToViewController(vc, animated: true)
-                return
-            }
-        }
-        // Fallback: just pop
-        navController.popViewController(animated: true)
-    }
-
     @objc private func didTapSettings() {
         let settingsVC = SettingsViewController()
         navigationController?.pushViewController(settingsVC, animated: true)
@@ -573,10 +237,6 @@ final class ProfileStoryboardCollectionViewController: UICollectionViewControlle
     }
     
     @objc private func didTapLogout() {
-        stopCallTimer()
-        isInCall = false
-        isComingFromCall = false
-
         SessionManager.shared.logout()
 
         let storyboard = UIStoryboard(name: "Main", bundle: nil)
@@ -614,30 +274,6 @@ extension ProfileStoryboardCollectionViewController {
                 let section = self.verticalSection(estimatedHeight: 120)
                 section.contentInsets.bottom = 32
                 return section
-            case .suggestedQuestions:
-                let section = self.verticalSection(estimatedHeight: 110)
-                if self.isInCall || self.isComingFromCall {
-                    let headerSize = NSCollectionLayoutSize(
-                        widthDimension: .fractionalWidth(1.0),
-                        heightDimension: .absolute(44)
-                    )
-
-                    let header = NSCollectionLayoutBoundarySupplementaryItem(
-                        layoutSize: headerSize,
-                        elementKind: UICollectionView.elementKindSectionHeader,
-                        alignment: .top
-                    )
-
-                    section.boundarySupplementaryItems = [header]
-                } else {
-                    section.boundarySupplementaryItems = []
-                }
-
-                return section
-
-
-
-
             }
         }
     }

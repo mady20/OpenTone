@@ -16,7 +16,7 @@
                 </viewControllerPlaceholder>
                 <placeholder placeholderIdentifier="IBFirstResponder" id="35b-3u-ZZq" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>
             </objects>
-            <point key="canvasLocation" x="3292" y="-168"/>
+            <point key="canvasLocation" x="3266" y="-192"/>
         </scene>
         <!--RolePlayStoryBoard-->
         <scene sceneID="3pn-QL-obY">
@@ -26,7 +26,7 @@
                 </viewControllerPlaceholder>
                 <placeholder placeholderIdentifier="IBFirstResponder" id="N7R-e4-Aac" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>
             </objects>
-            <point key="canvasLocation" x="3279" y="15"/>
+            <point key="canvasLocation" x="3279" y="70"/>
         </scene>
         <!--JamSessionStoryBoard-->
         <scene sceneID="eeo-Pu-cWV">
@@ -36,7 +36,7 @@
                 </viewControllerPlaceholder>
                 <placeholder placeholderIdentifier="IBFirstResponder" id="IHC-Gc-ox3" userLabel="First Responder" customClass="UIResponder" sceneMemberID="firstResponder"/>
             </objects>
-            <point key="canvasLocation" x="3278" y="162"/>
+            <point key="canvasLocation" x="3263" y="335"/>
         </scene>
         <!--Main Tab Bar Controller-->
         <scene sceneID="fPz-wB-Etc">

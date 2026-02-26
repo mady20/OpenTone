@@ -103,14 +103,14 @@ class HistoryTableViewCell: UITableViewCell {
         if let type = item.activityType {
             typeBadge.isHidden = false
             switch type {
-            case .call:
-                typeBadge.text = "CALL"
-                typeBadge.textColor = .systemGreen
             case .jam:
                 typeBadge.text = "JAM"
                 typeBadge.textColor = AppColors.primary
             case .roleplay:
                 typeBadge.text = "ROLEPLAY"
+                typeBadge.textColor = .systemOrange
+            case .aiCall:
+                typeBadge.text = "AI Call"
                 typeBadge.textColor = .systemOrange
             }
         } else {

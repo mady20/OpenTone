@@ -140,16 +140,6 @@ class HistoryDataModel {
     // MARK: - Sample Data
 
     private func loadSampleActivities() -> [Activity] {
-        let activity1 = Activity(
-            type: .call,
-            date: Date().addingTimeInterval(-86400),
-            topic: "Daily Conversation",
-            duration: 5,
-            xpEarned: 10,
-            isCompleted: true,
-            title: "Call Session",
-            imageURL: "call_sample"
-        )
 
         let activity2 = Activity(
             type: .jam,
@@ -173,6 +163,6 @@ class HistoryDataModel {
             imageURL: "roleplay_sample"
         )
 
-        return [activity1, activity2, activity3]
+        return [ activity2, activity3]
     }
 }

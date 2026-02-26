@@ -23,7 +23,6 @@ struct User: Identifiable, Codable, CustomStringConvertible{
     var currentPlan: UserPlan?
     var streak: Streak?
     var lastSeen: Date?
-    var callRecordIDs: [UUID]
     var roleplayIDs: [UUID]
     var jamSessionIDs: [UUID]
     var friendsIDs: [UUID]
@@ -43,7 +42,6 @@ struct User: Identifiable, Codable, CustomStringConvertible{
         avatar: String? = nil,
         streak: Streak? = nil,
         lastSeen: Date? = nil,
-        callRecordIDs: [UUID] = [],
         roleplayIDs: [UUID] = [],
         jamSessionIDs: [UUID] = [],
         friends: [UUID] = [],
@@ -64,7 +62,6 @@ struct User: Identifiable, Codable, CustomStringConvertible{
         self.avatar = avatar
         self.streak = streak
         self.lastSeen = lastSeen
-        self.callRecordIDs = callRecordIDs
         self.roleplayIDs = roleplayIDs
         self.jamSessionIDs = jamSessionIDs
         self.friendsIDs = friends
@@ -92,7 +89,6 @@ struct User: Identifiable, Codable, CustomStringConvertible{
         parts.append("avatar: \(avatar ?? "N/A")")
         parts.append("streak: \(streak?.commitment.description ?? "N/A")")
         parts.append("last seen: \(lastSeen?.description ?? "N/A")")
-        parts.append("call records: \(callRecordIDs.count)")
         parts.append("roleplays: \(roleplayIDs.count)")
         parts.append("jam sessions: \(jamSessionIDs.count)")
         parts.append("friends: \(friendsIDs.count)")

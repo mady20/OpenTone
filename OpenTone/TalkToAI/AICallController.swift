@@ -20,22 +20,15 @@ final class AICallController: UIViewController {
 
     // MARK: - Audio / Speech
 
-    private let audioEngine = AVAudioEngine()
-    private let speechSynthesizer = AVSpeechSynthesizer()
-    private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
-
-    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
-    private var recognitionTask: SFSpeechRecognitionTask?
+    private var audioPlayer: AVAudioPlayer?
 
     private var isMuted = false
     private var isListening = false
-    private var tapInstalled = false
 
-    private var lastPartialText: String = ""
-    private var lastPartialUpdate: Date = .distantPast
+    // VAD (Voice Activity Detection) State
+    private var lastVoiceUpdate: Date = .distantPast
     private var silenceTimer: Timer?
-    private let silenceThreshold: TimeInterval = 2.5
-    private let minUtteranceLength: Int = 8
+    private let silenceThreshold: TimeInterval = 2.0
 
     // MARK: - Ring Animation
 
@@ -83,19 +76,27 @@ final class AICallController: UIViewController {
 
     private var chatBubbles: [ChatBubble] = []
 
-    // MARK: - Lifecycle
+    /// Conversation history sent to Ollama (/chat endpoint treats text turns).
+    /// Each entry: ["role": "user"|"assistant", "content": "…"]
+    private var conversationHistory: [[String: String]] = []
 
     override func viewDidLoad() {
         super.viewDidLoad()
 
         view.backgroundColor = AppColors.screenBackground
-        speechSynthesizer.delegate = self
 
         setupRing()
         setupUI()
-        setupAudioSession()
+        
+        AudioManager.shared.onAudioBuffer = { [weak self] buffer in
+            self?.processAudio(buffer)
+        }
+
         startDisplayLink()
-        requestPermissionsAndStart()
+        AudioManager.shared.requestPermissions { [weak self] granted in
+            guard let self, granted else { return }
+            self.startListening()
+        }
     }
 
     override func viewDidLayoutSubviews() {
@@ -108,7 +109,10 @@ final class AICallController: UIViewController {
     deinit {
         displayLink?.invalidate()
         invalidateSilenceTimer()
-        teardownAudio()
+        audioPlayer?.stop()
+        if AudioManager.shared.isRecording {
+            AudioManager.shared.stopRecording(autoTranscribe: false)
+        }
     }
 
     // MARK: - UI Setup
@@ -255,45 +259,11 @@ final class AICallController: UIViewController {
 
     // MARK: - Permissions & Audio Session
 
-    private func requestPermissionsAndStart() {
-        SFSpeechRecognizer.requestAuthorization { [weak self] status in
-            guard status == .authorized else { return }
-
-            let requestMicPermission: (@escaping (Bool) -> Void) -> Void = { completion in
-                if #available(iOS 17.0, *) {
-                    AVAudioApplication.requestRecordPermission { granted in
-                        completion(granted)
-                    }
-                } else {
-                    AVAudioSession.sharedInstance().requestRecordPermission { granted in
-                        completion(granted)
-                    }
-                }
-            }
-
-            requestMicPermission { granted in
-                guard granted else { return }
-                DispatchQueue.main.async {
-                    self?.startListening()
-                }
-            }
-        }
-    }
-
-    private func setupAudioSession() {
-        let session = AVAudioSession.sharedInstance()
-        do {
-            try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker])
-            try session.setActive(true)
-        } catch {
-            print("❌ Audio session error:", error)
-        }
-    }
-
     private func teardownAudio() {
-        stopListening()
-        audioEngine.stop()
-        audioEngine.reset()
+        if AudioManager.shared.isRecording {
+            AudioManager.shared.stopRecording(autoTranscribe: false)
+        }
+        audioPlayer?.stop()
     }
 
     // MARK: - Listening
@@ -301,74 +271,21 @@ final class AICallController: UIViewController {
     private func startListening() {
         guard !isMuted else { return }
         guard !isListening else { return }
-        guard let recognizer = speechRecognizer, recognizer.isAvailable else { return }
 
         isListening = true
         currentState = .listening
-        audioEngine.reset()
-        lastPartialText = ""
-        lastPartialUpdate = .distantPast
+        
+        lastVoiceUpdate = .distantPast
         startSilenceTimer()
-
-        recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        recognitionRequest?.shouldReportPartialResults = true
-
-        let input = audioEngine.inputNode
-        let format = input.outputFormat(forBus: 0)
-
-        removeTap()
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
-            guard let self, !self.isMuted else { return }
-            self.recognitionRequest?.append(buffer)
-            self.processAudio(buffer)
-        }
-        tapInstalled = true
-
-        recognitionTask = recognizer.recognitionTask(with: recognitionRequest!) { [weak self] result, error in
-            guard let self else { return }
-
-            if let result {
-                let text = result.bestTranscription.formattedString
-                if !text.isEmpty, text != self.lastPartialText {
-                    self.lastPartialText = text
-                    self.lastPartialUpdate = Date()
-                }
-
-                if result.isFinal {
-                    self.invalidateSilenceTimer()
-                    self.handleFinalTranscript(text)
-                    return
-                }
-            }
-
-            if let error {
-                print("❌ Speech recognition error:", error.localizedDescription)
-                self.invalidateSilenceTimer()
-                self.restartListening()
-            }
-        }
-
-        do {
-            try audioEngine.start()
-        } catch {
-            print("❌ Audio engine start failed:", error)
-            invalidateSilenceTimer()
-            restartListening()
-        }
+        
+        AudioManager.shared.startRecording()
     }
 
     private func stopListening() {
         guard isListening else { return }
         isListening = false
-
-        recognitionRequest?.endAudio()
-        recognitionTask?.cancel()
-        recognitionTask = nil
-        recognitionRequest = nil
-
-        removeTap()
-        audioEngine.stop()
         invalidateSilenceTimer()
+        AudioManager.shared.stopRecording(autoTranscribe: false)
     }
 
     private func restartListening() {
@@ -380,18 +297,12 @@ final class AICallController: UIViewController {
         }
     }
 
-    private func removeTap() {
-        if tapInstalled {
-            audioEngine.inputNode.removeTap(onBus: 0)
-            tapInstalled = false
-        }
-    }
-
     // MARK: - Silence Detection
 
     private func startSilenceTimer() {
         invalidateSilenceTimer()
-        lastPartialUpdate = Date()
+        // Initialize to distant future so it won't fire instantly until audio bumps the level
+        lastVoiceUpdate = .distantFuture
         silenceTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
             self?.checkSilence()
         }
@@ -405,16 +316,20 @@ final class AICallController: UIViewController {
 
     private func checkSilence() {
         guard isListening else { return }
-        let elapsed = Date().timeIntervalSince(lastPartialUpdate)
-        if elapsed >= silenceThreshold, lastPartialText.count >= minUtteranceLength {
-            handleFinalTranscript(lastPartialText)
+        let now = Date()
+        
+        let elapsed = now.timeIntervalSince(lastVoiceUpdate)
+        
+        // If elapsed is large, check if we ever spoke
+        if elapsed >= silenceThreshold {
+            handleSilenceDetected()
         }
     }
 
     // MARK: - Audio Processing (for ring animation)
 
     private func processAudio(_ buffer: AVAudioPCMBuffer) {
-        guard !isMuted, let data = buffer.floatChannelData?[0] else { return }
+        guard !isMuted, currentState == .listening, let data = buffer.floatChannelData?[0] else { return }
         let count = Int(buffer.frameLength)
 
         var sum: Float = 0
@@ -422,75 +337,94 @@ final class AICallController: UIViewController {
 
         let rms = sqrt(sum / Float(count))
         let db = 20 * log10(max(rms, 0.000_001))
-        let normalized = max(0, min(1, (db + 50) / 50))
+        let normalized = max(0, min(1, (db + 50) / 50)) // 0.0 to 1.0
 
         DispatchQueue.main.async {
             self.smoothedLevel += (CGFloat(normalized) - self.smoothedLevel) * self.smoothingFactor
+            
+            // If acoustic level crosses a small threshold, user is probably speaking
+            if self.smoothedLevel > 0.15 {
+                self.lastVoiceUpdate = Date()
+            } else if self.lastVoiceUpdate == .distantFuture, self.smoothedLevel > 0.10 {
+                // Initialize it slightly lighter just in case
+                self.lastVoiceUpdate = Date()
+            }
         }
     }
 
-    // MARK: - Gemini Integration
+    // MARK: - Backend Integration
 
-    private func handleFinalTranscript(_ text: String) {
+    private func handleSilenceDetected() {
         stopListening()
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
+        
+        guard let url = AudioManager.shared.lastRecordingURL, 
+              let data = try? Data(contentsOf: url) else {
             restartListening()
             return
         }
 
-        // Show user bubble
-        addBubble(ChatBubble(sender: .user, text: trimmed))
         currentState = .processing
 
         Task {
             do {
-                let reply = try await GeminiService.shared.sendMessage(trimmed)
+                let userId = UserDataModel.shared.getCurrentUser()?.id.uuidString ?? "demo"
+                let response = try await BackendSpeechService.shared.analyzeChat(
+                    audioData: data,
+                    userId: userId,
+                    mode: "call",
+                    scenario: "Open Conversation",
+                    difficulty: "medium",
+                    conversationHistory: conversationHistory
+                )
+
                 await MainActor.run {
-                    self.addBubble(ChatBubble(sender: .ai, text: reply))
-                    self.speakAI(reply)
-                }
-            } catch let error as GeminiService.GeminiError {
-                await MainActor.run {
-                    let msg: String
-                    switch error {
-                    case .rateLimited:
-                        msg = "I need a moment to catch my breath. Please try again in a few seconds."
-                    case .quotaExhausted:
-                        msg = "API quota exceeded. Please check your Gemini API plan or try again later."
-                    case .noAPIKey:
-                        msg = "No API key found. Please add your Gemini key in Settings."
-                    default:
-                        msg = "Sorry, something went wrong. Please try again."
+                    let userText = response.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !userText.isEmpty {
+                        self.addBubble(ChatBubble(sender: .user, text: userText))
+                        self.conversationHistory.append(["role": "user", "content": userText])
                     }
-                    self.addBubble(ChatBubble(sender: .ai, text: msg))
-                    print("❌ Gemini error:", error.localizedDescription)
-                    self.restartListening()
+                    
+                    let aiText = response.coaching.llmCoaching?.improvedSentence ?? "Got it."
+                    self.conversationHistory.append(["role": "assistant", "content": aiText])
+                    self.addBubble(ChatBubble(sender: .ai, text: aiText))
+                    
+                    if let audioData = Data(base64Encoded: response.audioWavB64) {
+                        self.speakAI(audioData: audioData)
+                    } else {
+                        self.restartListening()
+                    }
                 }
             } catch {
                 await MainActor.run {
-                    self.addBubble(ChatBubble(sender: .ai, text: "Sorry, something went wrong. Please try again."))
-                    print("❌ Gemini error:", error.localizedDescription)
+                    let msg = "Sorry, something went wrong. Let's try again."
+                    self.addBubble(ChatBubble(sender: .ai, text: msg))
+                    print("❌ Backend error:", error.localizedDescription)
                     self.restartListening()
                 }
             }
         }
     }
 
-    private func speakAI(_ text: String) {
+    private func speakAI(audioData: Data) {
         guard !isMuted else {
             restartListening()
             return
         }
 
         currentState = .speaking
-        audioEngine.stop()
-        audioEngine.reset()
 
-        let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
-        utterance.rate = AVSpeechUtteranceDefaultSpeechRate
-        speechSynthesizer.speak(utterance)
+        do {
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetoothA2DP])
+            try session.setActive(true)
+            
+            audioPlayer = try AVAudioPlayer(data: audioData)
+            audioPlayer?.delegate = self
+            audioPlayer?.play()
+        } catch {
+            print("❌ Audio Player setup failed:", error)
+            restartListening()
+        }
     }
 
     // MARK: - Button Actions
@@ -504,7 +438,7 @@ final class AICallController: UIViewController {
         )
 
         if isMuted {
-            speechSynthesizer.stopSpeaking(at: .immediate)
+            audioPlayer?.stop()
             teardownAudio()
             currentState = .idle
         } else {
@@ -513,22 +447,19 @@ final class AICallController: UIViewController {
     }
 
     @objc private func closeTapped() {
-        speechSynthesizer.stopSpeaking(at: .immediate)
+        audioPlayer?.stop()
         teardownAudio()
-        GeminiService.shared.resetConversation()
+        conversationHistory.removeAll()
         dismiss(animated: true)
     }
 }
 
-// MARK: - AVSpeechSynthesizerDelegate
+// MARK: - AVAudioPlayerDelegate
 
-extension AICallController: AVSpeechSynthesizerDelegate {
-    func speechSynthesizer(_ s: AVSpeechSynthesizer, didFinish _: AVSpeechUtterance) {
+extension AICallController: AVAudioPlayerDelegate {
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         restartListening()
     }
-
-    func speechSynthesizer(_ s: AVSpeechSynthesizer, didStart _: AVSpeechUtterance) {}
-    func speechSynthesizer(_ s: AVSpeechSynthesizer, didCancel _: AVSpeechUtterance) {}
 }
 
 // MARK: - UITableViewDataSource & Delegate

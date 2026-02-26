@@ -107,7 +107,6 @@ extension UserRow {
                 lastActiveDate: streakLastActive
             ),
             lastSeen: lastSeen,
-            callRecordIDs: [],   // fetched separately
             roleplayIDs: [],     // fetched separately
             jamSessionIDs: [],   // fetched separately
             friends: friendIds ?? [],
@@ -164,7 +163,7 @@ struct ActivityRow: Codable {
 
     func toActivity() -> Activity {
         var activity = Activity(
-            type: ActivityType(rawValue: type) ?? .call,
+            type: ActivityType(rawValue: type) ?? .aiCall,
             date: date,
             topic: topic,
             duration: duration,
@@ -181,60 +180,7 @@ struct ActivityRow: Codable {
     }
 }
 
-// MARK: - CallRecord Row
 
-struct CallRecordRow: Codable {
-    let id: UUID
-    let userId: UUID
-    let participantId: UUID
-    let participantName: String?
-    let participantAvatarUrl: String?
-    let participantBio: String?
-    let participantInterests: [String]?
-    let callDate: Date
-    let duration: Double
-    let userStatus: String
-
-    enum CodingKeys: String, CodingKey {
-        case id, duration
-        case userId             = "user_id"
-        case participantId      = "participant_id"
-        case participantName    = "participant_name"
-        case participantAvatarUrl = "participant_avatar_url"
-        case participantBio     = "participant_bio"
-        case participantInterests = "participant_interests"
-        case callDate           = "call_date"
-        case userStatus         = "user_status"
-    }
-
-    init(from record: CallRecord, userId: UUID) {
-        self.id = record.id
-        self.userId = userId
-        self.participantId = record.participantID
-        self.participantName = record.participantName
-        self.participantAvatarUrl = record.participantAvatarURL
-        self.participantBio = record.participantBio
-        self.participantInterests = record.participantInterests?.map { $0.rawValue }
-        self.callDate = record.callDate
-        self.duration = record.duration
-        self.userStatus = record.userStatus.rawValue
-    }
-
-    func toCallRecord() -> CallRecord {
-        var record = CallRecord(
-            participantID: participantId,
-            participantName: participantName,
-            participantAvatarURL: participantAvatarUrl,
-            participantBio: participantBio,
-            participantInterests: participantInterests?.compactMap { Interest(rawValue: $0) },
-            callDate: callDate,
-            duration: duration,
-            userStatus: UserStatus(rawValue: userStatus) ?? .offline
-        )
-        record.setID(id)
-        return record
-    }
-}
 
 // MARK: - JamSession Row
 

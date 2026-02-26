@@ -1,5 +1,4 @@
 import Foundation
-import Speech
 import AVFAudio
 
 final class AudioManager {
@@ -7,9 +6,6 @@ final class AudioManager {
     static let shared = AudioManager()
 
     private let audioEngine = AVAudioEngine()
-    private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
-    private var request: SFSpeechAudioBufferRecognitionRequest?
-    private var task: SFSpeechRecognitionTask?
 
     // MARK: - File Recording (for backend /analyze upload)
 
@@ -25,6 +21,7 @@ final class AudioManager {
     private(set) var isMuted = false
     private var currentTranscription: String = ""
 
+    var onAudioBuffer: ((AVAudioPCMBuffer) -> Void)?
     var onFinalTranscription: ((String) -> Void)?
     var onRecordingStateChanged: ((Bool) -> Void)?
 
@@ -40,19 +37,13 @@ final class AudioManager {
 
 
     func requestPermissions(completion: @escaping (Bool) -> Void) {
-
-        SFSpeechRecognizer.requestAuthorization { status in
-            DispatchQueue.main.async {
-                if status != .authorized {
-                    completion(false)
-                    return
-                }
-
-                AVAudioApplication.requestRecordPermission { granted in
-                    DispatchQueue.main.async {
-                        completion(granted)
-                    }
-                }
+        if #available(iOS 17.0, *) {
+            AVAudioApplication.requestRecordPermission { granted in
+                DispatchQueue.main.async { completion(granted) }
+            }
+        } else {
+            AVAudioSession.sharedInstance().requestRecordPermission { granted in
+                DispatchQueue.main.async { completion(granted) }
             }
         }
     }
@@ -82,41 +73,15 @@ final class AudioManager {
         try? session.setCategory(.record, mode: .measurement, options: [.duckOthers])
         try? session.setActive(true, options: .notifyOthersOnDeactivation)
 
-        // --- SFSpeech pipeline (live transcript) ---
-
-        request = SFSpeechAudioBufferRecognitionRequest()
-        request?.shouldReportPartialResults = true
-
+        // Setup tap for amplitude tracking if needed by callers, 
+        // otherwise just let AVAudioRecorder do everything
         let input = audioEngine.inputNode
-
-        input.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] buffer, _ in
-            self?.request?.append(buffer)
+        input.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] buffer, _ in 
+            self?.onAudioBuffer?(buffer)
         }
 
         audioEngine.prepare()
         try? audioEngine.start()
-
-        task = recognizer?.recognitionTask(with: request!) { [weak self] result, error in
-            guard let self else { return }
-
-            if let result {
-                self.currentTranscription = result.bestTranscription.formattedString
-                print("🗣 LIVE:", self.currentTranscription)
-
-                if result.isFinal {
-                    print("✅ FINAL:", self.currentTranscription)
-                    if self.isRecording {
-                        self.onFinalTranscription?(self.currentTranscription)
-                        self.cleanup()
-                    }
-                }
-            }
-
-            if error != nil {
-                print("❌ Speech error:", error!)
-                self.cleanup()
-            }
-        }
 
         // --- AVAudioRecorder parallel file recording ---
 
@@ -135,15 +100,9 @@ final class AudioManager {
         audioRecorder?.record()
     }
 
-    func stopRecording() {
+    func stopRecording(autoTranscribe: Bool = true) {
         guard isRecording else { return }
         isRecording = false
-        request?.endAudio()
-
-        let finalSpeech = currentTranscription.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !finalSpeech.isEmpty {
-            onFinalTranscription?(finalSpeech)
-        }
 
         // Finalise the file recording
         audioRecorder?.stop()
@@ -151,6 +110,25 @@ final class AudioManager {
         audioRecorder = nil
 
         cleanup()
+
+        // Send to backend Whisper immediately so the UI behaves as before
+        if autoTranscribe, let url = lastRecordingURL, let data = try? Data(contentsOf: url),
+           let onFinal = onFinalTranscription {
+            
+            Task {
+                do {
+                    let response = try await BackendSpeechService.shared.transcribe(audioData: data)
+                    await MainActor.run {
+                        onFinal(response.transcript)
+                    }
+                } catch {
+                    print("❌ Backend Whisper transcription error:", error)
+                    await MainActor.run {
+                        onFinal("")
+                    }
+                }
+            }
+        }
     }
 
     private func cleanup() {
@@ -158,9 +136,6 @@ final class AudioManager {
              audioEngine.stop()
         }
         audioEngine.inputNode.removeTap(onBus: 0)
-        request = nil
-        task?.cancel()
-        task = nil
         isRecording = false
     }
 }

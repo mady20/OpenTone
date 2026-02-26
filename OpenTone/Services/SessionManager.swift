@@ -43,7 +43,6 @@ final class SessionManager {
     private func reloadAllDataModels() {
         StreakDataModel.shared.reloadForCurrentUser()
         HistoryDataModel.shared.reloadForCurrentUser()
-        CallRecordDataModel.shared.reloadForCurrentUser()
         JamSessionDataModel.shared.reloadForCurrentUser()
         RoleplaySessionDataModel.shared.reloadForCurrentUser()
         activities = []

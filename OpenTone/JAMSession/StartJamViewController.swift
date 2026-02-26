@@ -21,23 +21,7 @@ class StartJamViewController: UIViewController {
 
     // MARK: - Speech Recognition
 
-    private let speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "en-US"))
-    private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
-    private var recognitionTask: SFSpeechRecognitionTask?
     private let audioEngine = AVAudioEngine()
-
-    /// Accumulated final transcript across all start/pause cycles.
-    private var accumulatedTranscript: String = ""
-    /// Latest partial result from the current recognition session.
-    private var latestPartial: String = ""
-    /// Presentation transcript (what you show or pass to next screen).
-    private var currentTranscript: String {
-        let a = accumulatedTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-        let p = latestPartial.trimmingCharacters(in: .whitespacesAndNewlines)
-        if a.isEmpty { return p }
-        if p.isEmpty { return a }
-        return a + " " + p
-    }
 
     /// Tracks whether recording has been started at least once.
     private var hasStartedRecording = false
@@ -65,8 +49,8 @@ class StartJamViewController: UIViewController {
             self.applyDarkModeStyles()
         }
 
-        // Request speech recognition & microphone permissions, then start recording
-        requestSpeechPermissions()
+        // Request microphone permissions, then start recording
+        requestMicrophonePermissions()
     }
 
     private func applyDarkModeStyles() {
@@ -269,132 +253,47 @@ class StartJamViewController: UIViewController {
         String(format: "%02d:%02d", seconds / 60, seconds % 60)
     }
 
-    // MARK: - Speech Recognition
+    // MARK: - Audio Recording
 
-    private func requestSpeechPermissions() {
-        SFSpeechRecognizer.requestAuthorization { [weak self] status in
-            DispatchQueue.main.async {
-                switch status {
-                case .authorized:
-                    // Do not auto-start here if you prefer to wait for user tap;
-                    // existing behavior started recording automatically — preserve that.
-                    self?.startRecording()
-                case .denied, .restricted, .notDetermined:
-                    print("⚠️ Speech recognition not authorized: \(status.rawValue)")
-                @unknown default:
-                    break
+    private func requestMicrophonePermissions() {
+        if #available(iOS 17.0, *) {
+            AVAudioApplication.requestRecordPermission { [weak self] granted in
+                DispatchQueue.main.async {
+                    if granted {
+                        self?.startRecording()
+                    } else {
+                        print("⚠️ Microphone permission denied")
+                    }
+                }
+            }
+        } else {
+            AVAudioSession.sharedInstance().requestRecordPermission { [weak self] granted in
+                DispatchQueue.main.async {
+                    if granted {
+                        self?.startRecording()
+                    } else {
+                        print("⚠️ Microphone permission denied")
+                    }
                 }
             }
         }
     }
 
     private func startRecording() {
-        // Cancel existing recognition task if any — we always start a fresh session.
-        recognitionTask?.cancel()
-        recognitionTask = nil
-
-        guard let speechRecognizer = speechRecognizer, speechRecognizer.isAvailable else {
-            print("⚠️ Speech recognizer not available")
-            return
-        }
-
-        // Configure audio session
-        let audioSession = AVAudioSession.sharedInstance()
-        do {
-            try audioSession.setCategory(.record, mode: .measurement, options: .duckOthers)
-            try audioSession.setActive(true, options: .notifyOthersOnDeactivation)
-        } catch {
-            print("⚠️ Audio session setup failed: \(error)")
-            return
-        }
-
-        // Create new recognition request
-        recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-        guard let recognitionRequest = recognitionRequest else { return }
-        recognitionRequest.shouldReportPartialResults = true
-
-        // Start recognition task
-        recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
-            guard let self = self else { return }
-
-            if let result = result {
-                // Update latest partial (do not append to accumulated until final)
-                self.latestPartial = result.bestTranscription.formattedString
-                // Update any UI or local variables consuming transcript
-                // For example, timer or transcript display can read self.currentTranscript
-                // (We keep currentTranscript as computed property)
-            }
-
-            // When recognizer returns final, append the final partial to accumulatedTranscript
-            if (result?.isFinal ?? false) {
-                let finalText = (self.latestPartial ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                if !finalText.isEmpty {
-                    if !self.accumulatedTranscript.isEmpty {
-                        self.accumulatedTranscript += " "
-                    }
-                    self.accumulatedTranscript += finalText
-                }
-                // clear latest partial for the finished session
-                self.latestPartial = ""
-            }
-
-            if error != nil || (result?.isFinal ?? false) {
-                // Cleanup for this recognition session
-                self.recognitionRequest = nil
-                self.recognitionTask = nil
-                // Note: audio engine was stopped by pauseRecording() when user paused,
-                // or we can stop it here if the recognizer decided to finish.
-                // Ensure taps are removed if they exist.
-                if self.audioEngine.isRunning {
-                    self.audioEngine.stop()
-                    self.audioEngine.inputNode.removeTap(onBus: 0)
-                }
-            }
-        }
-
-        // Configure audio input
-        let inputNode = audioEngine.inputNode
-        let recordingFormat = inputNode.outputFormat(forBus: 0)
-        inputNode.removeTap(onBus: 0) // defensive: ensure no duplicate taps
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { buffer, _ in
-            self.recognitionRequest?.append(buffer)
-        }
-
-        audioEngine.prepare()
-        do {
-            try audioEngine.start()
-            hasStartedRecording = true
-            isMicOn = true
-            updateMicButtonAppearance()
-        } catch {
-            print("⚠️ Audio engine start failed: \(error)")
-        }
+        // We now rely exclusively on AudioManager for the actual file recording
+        // rather than starting our own engine, since we ripped out SFSpeechRecognizer
+        AudioManager.shared.startRecording()
+        hasStartedRecording = true
+        isMicOn = true
+        updateMicButtonAppearance()
     }
 
-    /// Pause the current session: stop feeding audio and signal end-of-audio to the recognizer.
-    /// The recognition handler will receive a final result and append it to accumulatedTranscript.
     private func pauseRecording() {
-        if audioEngine.isRunning {
-            audioEngine.stop()
-            audioEngine.inputNode.removeTap(onBus: 0)
-        }
-        // Signal end-of-audio so recognition can emit a final result
-        recognitionRequest?.endAudio()
-        // NOTE: do NOT update isMicOn or mic button UI here.
-        // Mic UI only changes on explicit user tap via micTapped().
+        AudioManager.shared.stopRecording()
     }
 
-    /// Stop everything and invalidate tasks (called when leaving screen or finishing)
     private func stopRecording() {
-        if audioEngine.isRunning {
-            audioEngine.stop()
-        }
-        audioEngine.inputNode.removeTap(onBus: 0)
-        recognitionRequest?.endAudio()
-        recognitionTask?.cancel()
-        recognitionRequest = nil
-        recognitionTask = nil
-        // Do not touch mic button UI — screen is leaving
+        AudioManager.shared.stopRecording()
     }
 
     private func updateMicButtonAppearance() {
@@ -410,11 +309,6 @@ class StartJamViewController: UIViewController {
         }
     }
 
-    // MARK: - Helper to get final transcript for pass-through/submit
-    private func getFinalTranscript() -> String {
-        // combine accumulated + any in-flight partial (useful when finishing)
-        return currentTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
 }
 
 // MARK: - TimerManagerDelegate
@@ -438,8 +332,8 @@ extension StartJamViewController: TimerManagerDelegate {
         guard !didFinishSpeech else { return }
         didFinishSpeech = true
 
-        // Capture the final transcript (accumulated + partial) as fallback
-        let transcript = getFinalTranscript()
+        // Note: The feedback screen uploads the audio file to Whisper via /analyze/audio
+        // to get the transcript, metrics, and coaching.
         stopRecording()
 
         timerLabel.text = "00:00"
@@ -461,13 +355,16 @@ extension StartJamViewController: TimerManagerDelegate {
         let vc = storyboard.instantiateViewController(withIdentifier: "Feedback") as! FeedbackCollectionViewController
         vc.navigationItem.hidesBackButton = true
 
-        vc.transcript       = transcript
+        vc.transcript       = nil // Let the backend compute the transcript
         vc.topic            = session.topic
         vc.speakingDuration = speakingDuration
         vc.sessionId        = session.id.uuidString
         vc.userId           = UserDataModel.shared.getCurrentUser()?.id.uuidString ?? "demo"
-        // audioURL is nil in demo mode — backend uses transcript fallback
-
+        
+        // Pass the raw local audio file to the feedback screen to unlock Whisper timestamps
+        if let localURL = AudioManager.shared.lastRecordingURL {
+            vc.audioURL = localURL.absoluteString
+        }
         tabBarController?.tabBar.isHidden = false
         navigationController?.pushViewController(vc, animated: true)
     }

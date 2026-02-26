@@ -312,7 +312,7 @@ class HomeCollectionViewController: UICollectionViewController {
         case .completeTask:
             return hasUnfinishedLastTask ? 1 : 0
         case .callSession:
-            return 2
+            return 1
         case .recommended:
             return recommendedScenarios.count
         }
@@ -393,11 +393,7 @@ class HomeCollectionViewController: UICollectionViewController {
                 withReuseIdentifier: "CallSessionCell",
                 for: indexPath
             ) as! CallSessionCell
-            if( indexPath.item == 0){
-                cell.configure(imageURL: "person.line.dotted.person.fill", labelText: "Human")
-            }else{
-                cell.configure(imageURL: "sparkles", labelText: "AI")
-            }
+            cell.configure(imageURL: "sparkles", labelText: "AI")
             return cell
 
         case .recommended:
@@ -441,7 +437,7 @@ extension HomeCollectionViewController {
                     : self.nothingLayout()
                 
             case .callSession:
-                return self.twoItemFixedSection()
+                return self.fullWidthSection()
 
             case .recommended:
                 return self.horizontalScrollingSection()
@@ -661,32 +657,16 @@ extension HomeCollectionViewController {
         
 
         case .callSession:
-            if indexPath.row == 0 {
-                let alert = UIAlertController(
-                    title: "Feature Unavailable",
-                    message: "This feature requires real users to be online. Since there are no active users yet, you can only preview the UI for now.",
-                    preferredStyle: .alert
-                )
-                alert.addAction(UIAlertAction(title: "Preview UI", style: .default) { [weak self] _ in
-                    let storyboard = UIStoryboard(name: "CallStoryBoard", bundle: nil)
-                    guard let navController = storyboard.instantiateInitialViewController() as? UINavigationController,
-                          let rootVC = navController.viewControllers.first else { return }
-                    self?.navigationController?.pushViewController(rootVC, animated: true)
-                })
-                alert.addAction(UIAlertAction(title: "Go Back", style: .cancel))
-                present(alert, animated: true)
-            } else {
-                // AI Speech Coach — launches the AI call flow
-                // BackendSpeechService handles analysis; no Gemini key required.
-                let storyboard = UIStoryboard(name: "AICall", bundle: nil)
-                guard let scoreVC = storyboard.instantiateInitialViewController() else {
-                    print("AICall storyboard initial VC not found")
-                    return
-                }
-                scoreVC.modalPresentationStyle = .fullScreen
-                scoreVC.modalTransitionStyle = .crossDissolve
-                present(scoreVC, animated: true)
+            // AI Speech Coach — launches the AI call flow
+            // BackendSpeechService handles analysis; no Gemini key required.
+            let storyboard = UIStoryboard(name: "AICall", bundle: nil)
+            guard let scoreVC = storyboard.instantiateInitialViewController() else {
+                print("AICall storyboard initial VC not found")
+                return
             }
+            scoreVC.modalPresentationStyle = .fullScreen
+            scoreVC.modalTransitionStyle = .crossDissolve
+            present(scoreVC, animated: true)
 
         case .recommended:
 

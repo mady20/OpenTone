@@ -1,7 +1,7 @@
 import Foundation
 
 enum ActivityType: String, Codable {
-    case call = "Call Session"
+    case aiCall = "AI Call"
     case jam = "JAM Session"
     case roleplay = "Roleplay"
 }

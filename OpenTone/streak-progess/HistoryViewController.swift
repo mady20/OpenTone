@@ -9,6 +9,8 @@ class HistoryViewController: UIViewController {
     private let searchController = UISearchController(searchResultsController: nil)
     private var filteredItems: [HistoryItem] = []
 
+    private let headerView = ProgressHeaderView()
+
     override func viewDidLoad() {
         super.viewDidLoad()
 
@@ -21,11 +23,35 @@ class HistoryViewController: UIViewController {
         tableView.estimatedRowHeight = 100
         tableView.separatorStyle = .none
 
+        // Setup Header View Layout
+        headerView.frame = CGRect(x: 0, y: 0, width: view.bounds.width, height: 260)
+        tableView.tableHeaderView = headerView
+
         setupSearchController()
         setupNavigation()
 
         filteredItems = items
         tableView.reloadData()
+
+        fetchProgressData()
+    }
+
+    private func fetchProgressData() {
+        Task {
+            do {
+                let userId = UserDataModel.shared.getCurrentUser()?.id.uuidString ?? "demo"
+                let profile = try await BackendSpeechService.shared.fetchProfile(userId: userId)
+                await MainActor.run {
+                    self.headerView.configure(with: profile)
+                    // Re-layout header if needed
+                    self.headerView.setNeedsLayout()
+                    self.headerView.layoutIfNeeded()
+                    self.tableView.tableHeaderView = self.headerView
+                }
+            } catch {
+                print("⚠️ Failed to load progress data for history: \(error.localizedDescription)")
+            }
+        }
     }
 
     private func setupNavigation() {

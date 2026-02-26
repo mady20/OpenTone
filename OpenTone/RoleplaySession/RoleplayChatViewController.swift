@@ -48,15 +48,19 @@ class RoleplayChatViewController: UIViewController {
     private var isProcessingResponse = false
     private var isMuted = false
 
-    // MARK: - TTS
+    private var audioPlayer: AVAudioPlayer?
 
-    private let speechSynthesizer = AVSpeechSynthesizer()
+    // MARK: - Scripted roleplay (primary mode)
+    // Ollama-powered roleplay remains available as a fallback path.
 
-    // MARK: - Scripted roleplay (primary mode — no Gemini)
-    // Gemini roleplay methods remain available as a fallback path.
+    private struct LLMMessage {
+        enum Role: String { case user, model }
+        let role: Role
+        let text: String
+    }
 
-    private var geminiHistory: [GeminiService.Message] = []
-    private var geminiTurnCount = 0
+    private var llmHistory: [LLMMessage] = []
+    private var geminiTurnCount = 0  // reused for LLM turn tracking
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -69,7 +73,6 @@ class RoleplayChatViewController: UIViewController {
         RoleplaySessionDataModel.shared.activeScenario = scenario
 
         title = scenario.title
-        speechSynthesizer.delegate = self
         setupUI()
         setupTableView()
         setupButtons()
@@ -140,7 +143,7 @@ class RoleplayChatViewController: UIViewController {
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
 
-        speechSynthesizer.stopSpeaking(at: .immediate)
+        audioPlayer?.stop()
 
         if AudioManager.shared.isRecording {
             AudioManager.shared.stopRecording()
@@ -177,7 +180,7 @@ class RoleplayChatViewController: UIViewController {
     }
 
     private func startGeminiRoleplay() {
-        geminiHistory.removeAll()
+        llmHistory.removeAll()
         geminiTurnCount = 0
         isProcessingResponse = true
 
@@ -211,87 +214,43 @@ class RoleplayChatViewController: UIViewController {
     }
 
     private func sendToGeminiForRoleplay(_ text: String) async throws -> String {
-        guard let apiKey = GeminiAPIKeyManager.shared.getAPIKey() else {
-            throw GeminiService.GeminiError.noAPIKey
+        // Build history context
+        let historySnippet = llmHistory.suffix(8).map {
+            "\($0.role == .user ? "USER" : "ASSISTANT"): \($0.text)"
+        }.joined(separator: "\n")
+
+        llmHistory.append(LLMMessage(role: .user, text: text))
+
+        let baseURL = "http://localhost:11434"
+        guard let url = URL(string: "\(baseURL)/api/generate") else {
+            throw URLError(.badURL)
         }
 
-        geminiHistory.append(GeminiService.Message(role: .user, text: text))
+        let systemPrompt = buildRoleplaySystemPrompt()
+        let fullPrompt = "\(systemPrompt)\n\nConversation so far:\n\(historySnippet)\nUSER: \(text)\nASSISTANT:"
 
-        let models = ["gemini-2.5-flash"]
-        let baseURL = "https://generativelanguage.googleapis.com/v1beta/models"
+        let body: [String: Any] = [
+            "model": "mistral",
+            "prompt": fullPrompt,
+            "stream": false,
+            "options": ["temperature": 0.8, "num_predict": 300]
+        ]
 
-        var lastError: Error = GeminiService.GeminiError.emptyResponse
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 45
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
-        for model in models {
-            do {
-                let urlString = "\(baseURL)/\(model):generateContent?key=\(apiKey)"
-                guard let url = URL(string: urlString) else { continue }
-
-                var request = URLRequest(url: url)
-                request.httpMethod = "POST"
-                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                request.timeoutInterval = 30
-
-                var contents: [[String: Any]] = []
-                for msg in geminiHistory {
-                    contents.append([
-                        "role": msg.role.rawValue,
-                        "parts": [["text": msg.text]]
-                    ])
-                }
-
-                let body: [String: Any] = [
-                    "contents": contents,
-                    "generationConfig": [
-                        "temperature": 0.8,
-                        "topP": 0.9,
-                        "maxOutputTokens": 300
-                    ]
-                ]
-
-                request.httpBody = try JSONSerialization.data(withJSONObject: body)
-                let (data, response) = try await URLSession.shared.data(for: request)
-
-                if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
-                    let bodyStr = String(data: data, encoding: .utf8) ?? ""
-                    if http.statusCode == 429 && (bodyStr.contains("limit: 0") || bodyStr.contains("RESOURCE_EXHAUSTED")) {
-                        continue // try next model
-                    }
-                    throw GeminiService.GeminiError.httpError(http.statusCode, bodyStr)
-                }
-
-                guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let candidates = json["candidates"] as? [[String: Any]],
-                      let first = candidates.first,
-                      let content = first["content"] as? [String: Any],
-                      let parts = content["parts"] as? [[String: Any]],
-                      let textPart = parts.first,
-                      let text = textPart["text"] as? String,
-                      !text.isEmpty else {
-                    throw GeminiService.GeminiError.emptyResponse
-                }
-
-                let reply = text.trimmingCharacters(in: .whitespacesAndNewlines)
-                geminiHistory.append(GeminiService.Message(role: .model, text: reply))
-                return reply
-
-            } catch GeminiService.GeminiError.httpError(429, _) {
-                lastError = GeminiService.GeminiError.rateLimited
-                continue
-            } catch {
-                lastError = error
-                // Remove user message if we fail
-                if geminiHistory.last?.role == .user {
-                    geminiHistory.removeLast()
-                }
-                throw error
-            }
+        let (data, _) = try await URLSession.shared.data(for: request)
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let reply = json["response"] as? String, !reply.isEmpty else {
+            throw URLError(.badServerResponse)
         }
 
-        if geminiHistory.last?.role == .user {
-            geminiHistory.removeLast()
-        }
-        throw lastError
+        let trimmed = reply.trimmingCharacters(in: .whitespacesAndNewlines)
+        llmHistory.append(LLMMessage(role: .model, text: trimmed))
+        return trimmed
     }
 
     private func handleGeminiResponse(_ response: String) {
@@ -372,14 +331,31 @@ class RoleplayChatViewController: UIViewController {
             AudioManager.shared.stopRecording()
         }
 
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
-        try? session.setActive(true)
-
-        let utterance = AVSpeechUtterance(string: text)
-        utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
-        utterance.rate = AVSpeechUtteranceDefaultSpeechRate * 0.9
-        speechSynthesizer.speak(utterance)
+        Task {
+            do {
+                let audioData = try await BackendSpeechService.shared.tts(text: text)
+                
+                // Switch thread to play back
+                await MainActor.run {
+                    guard !self.isMuted else { return }
+                    
+                    let session = AVAudioSession.sharedInstance()
+                    try? session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
+                    try? session.setActive(true)
+                    
+                    do {
+                        self.audioPlayer = try AVAudioPlayer(data: audioData)
+                        self.audioPlayer?.delegate = self
+                        self.audioPlayer?.prepareToPlay()
+                        self.audioPlayer?.play()
+                    } catch {
+                        print("Roleplay Audio Player Error: \(error)")
+                    }
+                }
+            } catch {
+                print("Roleplay TTS Error: \(error)")
+            }
+        }
     }
 
     // MARK: - Mute
@@ -394,7 +370,7 @@ class RoleplayChatViewController: UIViewController {
         )
 
         if isMuted {
-            speechSynthesizer.stopSpeaking(at: .immediate)
+            audioPlayer?.stop()
             if AudioManager.shared.isRecording {
                 AudioManager.shared.stopRecording()
             }
@@ -412,8 +388,8 @@ class RoleplayChatViewController: UIViewController {
     @IBAction func micTapped(_ sender: UIButton) {
 
         // Stop TTS if playing so user can speak
-        if speechSynthesizer.isSpeaking {
-            speechSynthesizer.stopSpeaking(at: .immediate)
+        if let player = audioPlayer, player.isPlaying {
+            player.stop()
         }
 
         if AudioManager.shared.isRecording {
@@ -614,7 +590,7 @@ class RoleplayChatViewController: UIViewController {
     }
 
     private func showExitAlert() {
-        speechSynthesizer.stopSpeaking(at: .immediate)
+        audioPlayer?.stop()
 
         if AudioManager.shared.isRecording {
             AudioManager.shared.stopRecording()
@@ -657,7 +633,7 @@ class RoleplayChatViewController: UIViewController {
 
     
     private func replayRoleplayFromStart() {
-        speechSynthesizer.stopSpeaking(at: .immediate)
+        audioPlayer?.stop()
 
         session.currentLineIndex = 0
         session.status = .notStarted
@@ -674,7 +650,7 @@ class RoleplayChatViewController: UIViewController {
     }
 
     private func presentScoreScreen() {
-        speechSynthesizer.stopSpeaking(at: .immediate)
+        audioPlayer?.stop()
 
         let storyboard = UIStoryboard(name: "RolePlayStoryBoard", bundle: nil)
 
@@ -696,10 +672,10 @@ class RoleplayChatViewController: UIViewController {
 
 }
 
-// MARK: - AVSpeechSynthesizerDelegate
+// MARK: - AVAudioPlayerDelegate
 
-extension RoleplayChatViewController: AVSpeechSynthesizerDelegate {
-    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+extension RoleplayChatViewController: AVAudioPlayerDelegate {
+    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
         // Reset audio session for recording after TTS finishes
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.record, mode: .measurement, options: [.duckOthers])

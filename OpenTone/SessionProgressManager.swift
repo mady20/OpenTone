@@ -6,13 +6,13 @@ class SessionProgressManager {
     private init() {}
 
     enum SessionType: String {
-        case oneToOne
+        case aiCall
         case twoMinJam
         case roleplay
 
         var durationInMinutes: Int {
             switch self {
-            case .oneToOne: return 10
+            case .aiCall: return 10
             case .twoMinJam: return 2
             case .roleplay: return 15
             }
@@ -20,7 +20,7 @@ class SessionProgressManager {
 
         var xp: Int {
             switch self {
-            case .oneToOne: return 20
+            case .aiCall: return 20
             case .twoMinJam: return 15
             case .roleplay: return 25
             }
@@ -28,7 +28,7 @@ class SessionProgressManager {
 
         var title: String {
             switch self {
-            case .oneToOne: return "1 to 1 Call"
+            case .aiCall: return "AI Call"
             case .twoMinJam: return "2 Min Session"
             case .roleplay: return "Roleplay"
             }
@@ -36,7 +36,7 @@ class SessionProgressManager {
 
         var iconName: String {
             switch self {
-            case .oneToOne: return "phone.fill"
+            case .aiCall: return "phone.fill"
             case .twoMinJam: return "mic.fill"
             case .roleplay: return "theatermasks.fill"
             }

@@ -88,6 +88,41 @@ final class BackendSpeechService {
         return body
     }
 
+    // MARK: - POST /transcribe (Quick whisper-only ASR)
+
+    func transcribe(audioData: Data, userId: String = "demo") async throws -> TranscribeResponse {
+        guard let url = URL(string: "\(baseURL)/transcribe") else {
+            throw BackendError.httpError(0, "Invalid URL")
+        }
+
+        let boundary = "OpenTone-Transcribe-\(UUID().uuidString)"
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 60
+
+        var body = Data()
+        let crlf = "\r\n"
+        let dash = "--"
+
+        // Form field: user_id
+        body.append("\(dash)\(boundary)\(crlf)".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"user_id\"\(crlf)\(crlf)".data(using: .utf8)!)
+        body.append("\(userId)\(crlf)".data(using: .utf8)!)
+
+        // Audio file field
+        body.append("\(dash)\(boundary)\(crlf)".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"audio.m4a\"\(crlf)".data(using: .utf8)!)
+        body.append("Content-Type: audio/m4a\(crlf)\(crlf)".data(using: .utf8)!)
+        body.append(audioData)
+        body.append(crlf.data(using: .utf8)!)
+
+        body.append("\(dash)\(boundary)\(dash)\(crlf)".data(using: .utf8)!)
+        request.httpBody = body
+
+        return try await fetchDecoded(request)
+    }
+
     // MARK: - POST /analyze  (JSON transcript fallback)
 
     /// Analyze speech — prefers audio URL, falls back to transcript+duration.
@@ -121,6 +156,88 @@ final class BackendSpeechService {
         request.httpBody = try JSONEncoder().encode(body)
 
         return try await fetchDecoded(request)
+    }
+
+    // MARK: - POST /chat  (1-on-1 AI Call conversation turn)
+
+    /// Send one audio chunk from the AI Call screen.
+    /// Returns the AI's text reply, WAV audio bytes, and per-turn metrics.
+    func analyzeChat(
+        audioData: Data,
+        userId: String,
+        mode: String = "call",
+        scenario: String = "",
+        difficulty: String = "medium",
+        conversationHistory: [[String: String]] = []
+    ) async throws -> ChatResponse {
+        guard let url = URL(string: "\(baseURL)/chat") else {
+            throw BackendError.httpError(0, "Invalid URL")
+        }
+
+        let boundary = "OpenTone-Chat-\(UUID().uuidString)"
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 90
+
+        // Encode conversation history as JSON string
+        let historyJSON = (try? JSONSerialization.data(withJSONObject: conversationHistory)).flatMap {
+            String(data: $0, encoding: .utf8)
+        } ?? "[]"
+
+        request.httpBody = buildChatMultipart(
+            boundary: boundary,
+            audioData: audioData,
+            userId: userId,
+            mode: mode,
+            scenario: scenario,
+            difficulty: difficulty,
+            historyJSON: historyJSON
+        )
+
+        let chatResponse: ChatResponse = try await fetchDecoded(request)
+
+        // Persist WPM delta for dashboard ProgressCell
+        UserDefaults.standard.set(chatResponse.metrics.wpm, forKey: "opentone.lastWpmDelta")
+
+        return chatResponse
+    }
+
+    private func buildChatMultipart(
+        boundary: String,
+        audioData: Data,
+        userId: String,
+        mode: String,
+        scenario: String,
+        difficulty: String,
+        historyJSON: String
+    ) -> Data {
+        var body = Data()
+        let crlf = "\r\n"
+        let dash = "--"
+
+        func appendText(_ name: String, _ value: String) {
+            body.append("\(dash)\(boundary)\(crlf)".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"\(name)\"\(crlf)\(crlf)".data(using: .utf8)!)
+            body.append(value.data(using: .utf8)!)
+            body.append(crlf.data(using: .utf8)!)
+        }
+
+        appendText("user_id", userId)
+        appendText("mode", mode)
+        appendText("scenario", scenario)
+        appendText("difficulty", difficulty)
+        appendText("conversation_history", historyJSON)
+
+        // Audio field
+        body.append("\(dash)\(boundary)\(crlf)".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"chunk.m4a\"\(crlf)".data(using: .utf8)!)
+        body.append("Content-Type: audio/m4a\(crlf)\(crlf)".data(using: .utf8)!)
+        body.append(audioData)
+        body.append(crlf.data(using: .utf8)!)
+
+        body.append("\(dash)\(boundary)\(dash)\(crlf)".data(using: .utf8)!)
+        return body
     }
 
     // MARK: - GET /user/profile
