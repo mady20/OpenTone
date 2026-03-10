@@ -85,7 +85,7 @@ class RoleplaySessionDataModel {
                 topic: scenario.description,
                 duration: duration,
                 imageURL: scenario.imageURL,
-                xpEarned: 12,
+                xpEarned: updated.xpEarned,
                 isCompleted: true,
                 scenarioId: scenario.id
             )
@@ -165,9 +165,26 @@ class RoleplaySessionDataModel {
     }
 
     func deleteSavedSession() {
+        let sessionToDelete = _savedSessionCache
+
         _savedSessionCache = nil
         _savedScenarioCache = nil
         _hasSavedSessionCached = false
+
+        // Also remove the row from Supabase so no ghost data remains
+        if let session = sessionToDelete {
+            Task {
+                do {
+                    try await supabase
+                        .from(SupabaseTable.roleplaySessions)
+                        .delete()
+                        .eq("id", value: session.id.uuidString)
+                        .execute()
+                } catch {
+                    print("❌ Failed to delete saved roleplay session from Supabase: \(error.localizedDescription)")
+                }
+            }
+        }
     }
 
     func cancelSession() {

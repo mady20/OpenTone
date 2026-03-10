@@ -24,11 +24,14 @@ final class AICallController: UIViewController {
 
     private var isMuted = false
     private var isListening = false
+    private var isProcessing = false   // re-entry guard for handleSilenceDetected
 
     // VAD (Voice Activity Detection) State
     private var lastVoiceUpdate: Date = .distantPast
+    private var hasSpoken = false      // true once voice level crosses threshold
     private var silenceTimer: Timer?
     private let silenceThreshold: TimeInterval = 2.0
+    private let maxListenDuration: TimeInterval = 30.0  // safety cap
 
     // MARK: - Ring Animation
 
@@ -273,9 +276,16 @@ final class AICallController: UIViewController {
         guard !isListening else { return }
 
         isListening = true
+        isProcessing = false
+        hasSpoken = false
         currentState = .listening
+
+        // Use playAndRecord consistently so we never need to switch categories
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetoothA2DP])
+        try? session.setActive(true)
         
-        lastVoiceUpdate = .distantPast
+        lastVoiceUpdate = Date()  // start the clock
         startSilenceTimer()
         
         AudioManager.shared.startRecording()
@@ -301,9 +311,7 @@ final class AICallController: UIViewController {
 
     private func startSilenceTimer() {
         invalidateSilenceTimer()
-        // Initialize to distant future so it won't fire instantly until audio bumps the level
-        lastVoiceUpdate = .distantFuture
-        silenceTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] _ in
+        silenceTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
             self?.checkSilence()
         }
         RunLoop.main.add(silenceTimer!, forMode: .common)
@@ -315,13 +323,15 @@ final class AICallController: UIViewController {
     }
 
     private func checkSilence() {
-        guard isListening else { return }
-        let now = Date()
-        
-        let elapsed = now.timeIntervalSince(lastVoiceUpdate)
-        
-        // If elapsed is large, check if we ever spoke
-        if elapsed >= silenceThreshold {
+        guard isListening, !isProcessing else { return }
+
+        let elapsed = Date().timeIntervalSince(lastVoiceUpdate)
+
+        if hasSpoken && elapsed >= silenceThreshold {
+            // User spoke then went silent → process their turn
+            handleSilenceDetected()
+        } else if !hasSpoken && elapsed >= maxListenDuration {
+            // Safety cap: no voice detected for too long → prompt them
             handleSilenceDetected()
         }
     }
@@ -342,11 +352,9 @@ final class AICallController: UIViewController {
         DispatchQueue.main.async {
             self.smoothedLevel += (CGFloat(normalized) - self.smoothedLevel) * self.smoothingFactor
             
-            // If acoustic level crosses a small threshold, user is probably speaking
-            if self.smoothedLevel > 0.15 {
-                self.lastVoiceUpdate = Date()
-            } else if self.lastVoiceUpdate == .distantFuture, self.smoothedLevel > 0.10 {
-                // Initialize it slightly lighter just in case
+            // Voice detected — mark as spoken and reset silence timer
+            if self.smoothedLevel > 0.12 {
+                self.hasSpoken = true
                 self.lastVoiceUpdate = Date()
             }
         }
@@ -355,10 +363,15 @@ final class AICallController: UIViewController {
     // MARK: - Backend Integration
 
     private func handleSilenceDetected() {
+        guard !isProcessing else { return }  // prevent re-entry
+        isProcessing = true
+
         stopListening()
         
         guard let url = AudioManager.shared.lastRecordingURL, 
-              let data = try? Data(contentsOf: url) else {
+              let data = try? Data(contentsOf: url),
+              data.count > 1000 else {  // minimum ~1KB to avoid sending noise/silence
+            isProcessing = false
             restartListening()
             return
         }
@@ -384,21 +397,26 @@ final class AICallController: UIViewController {
                         self.conversationHistory.append(["role": "user", "content": userText])
                     }
                     
-                    let aiText = response.coaching.llmCoaching?.improvedSentence ?? "Got it."
+                    // Use the LLM's conversational reply; fall back to coaching only if empty
+                    let aiText = response.llmReply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? (response.coaching.llmCoaching?.improvedSentence ?? "Could you say that again?")
+                        : response.llmReply
                     self.conversationHistory.append(["role": "assistant", "content": aiText])
                     self.addBubble(ChatBubble(sender: .ai, text: aiText))
                     
-                    if let audioData = Data(base64Encoded: response.audioWavB64) {
+                    if let audioData = Data(base64Encoded: response.audioWavB64), !audioData.isEmpty {
                         self.speakAI(audioData: audioData)
                     } else {
+                        self.isProcessing = false
                         self.restartListening()
                     }
                 }
             } catch {
                 await MainActor.run {
-                    let msg = "Sorry, something went wrong. Let's try again."
-                    self.addBubble(ChatBubble(sender: .ai, text: msg))
                     print("❌ Backend error:", error.localizedDescription)
+                    let msg = "Sorry, I had trouble hearing you. Could you try again?"
+                    self.addBubble(ChatBubble(sender: .ai, text: msg))
+                    self.isProcessing = false
                     self.restartListening()
                 }
             }
@@ -407,6 +425,7 @@ final class AICallController: UIViewController {
 
     private func speakAI(audioData: Data) {
         guard !isMuted else {
+            isProcessing = false
             restartListening()
             return
         }
@@ -414,15 +433,13 @@ final class AICallController: UIViewController {
         currentState = .speaking
 
         do {
-            let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetoothA2DP])
-            try session.setActive(true)
-            
+            // Audio session already set to .playAndRecord in startListening — no switch needed
             audioPlayer = try AVAudioPlayer(data: audioData)
             audioPlayer?.delegate = self
             audioPlayer?.play()
         } catch {
             print("❌ Audio Player setup failed:", error)
+            isProcessing = false
             restartListening()
         }
     }
@@ -458,6 +475,7 @@ final class AICallController: UIViewController {
 
 extension AICallController: AVAudioPlayerDelegate {
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        isProcessing = false
         restartListening()
     }
 }

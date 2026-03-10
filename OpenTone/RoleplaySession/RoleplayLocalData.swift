@@ -2,7 +2,7 @@
 import Foundation
 
 
-var scenarios: [RoleplayScenario] = [
+let scenarios: [RoleplayScenario] = [
     RoleplayScenario(
         id: UUID(uuidString: "11111111-1111-1111-1111-111111111111")!,
         title: "Grocery Shopping",

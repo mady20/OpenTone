@@ -525,7 +525,7 @@
                                 <nil key="textColor"/>
                                 <nil key="highlightedColor"/>
                             </label>
-                            <stackView opaque="NO" contentMode="scaleToFill" distribution="equalCentering" alignment="center" spacing="45" translatesAutoresizingMaskIntoConstraints="NO" id="L0a-DZ-0DA">
+                            <stackView opaque="NO" contentMode="scaleToFill" distribution="equalSpacing" alignment="center" spacing="45" translatesAutoresizingMaskIntoConstraints="NO" id="L0a-DZ-0DA">
                                 <rect key="frame" x="35" y="667" width="332" height="90"/>
                                 <subviews>
                                     <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="vCE-4t-50n">
@@ -564,25 +564,11 @@
                                             <directionalEdgeInsets key="contentInsets" top="0.0" leading="0.0" bottom="0.0" trailing="0.0"/>
                                             <color key="baseForegroundColor" red="0.3391113281" green="0.24060060080000001" blue="0.740234375" alpha="1" colorSpace="custom" customColorSpace="displayP3"/>
                                         </buttonConfiguration>
-                                    </button>
-                                    <button opaque="NO" contentMode="scaleToFill" contentHorizontalAlignment="center" contentVerticalAlignment="center" buttonType="system" lineBreakMode="middleTruncation" translatesAutoresizingMaskIntoConstraints="NO" id="tnC-Gw-fi0">
-                                        <rect key="frame" x="282" y="20" width="50" height="50"/>
-                                        <constraints>
-                                            <constraint firstAttribute="height" constant="50" id="Jcl-TQ-wRR"/>
-                                            <constraint firstAttribute="width" constant="50" id="PqY-cQ-iKb"/>
-                                        </constraints>
-                                        <state key="normal" title="Button"/>
-                                        <buttonConfiguration key="configuration" style="gray" image="xmark" catalog="system">
-                                            <backgroundConfiguration key="background" cornerRadius="25" strokeWidth="1">
-                                                <color key="backgroundColor" red="0.94901960780000005" green="0.93333333330000001" blue="1" alpha="1" colorSpace="custom" customColorSpace="displayP3"/>
-                                                <color key="strokeColor" red="0.3391113281" green="0.24060060080000001" blue="0.740234375" alpha="1" colorSpace="custom" customColorSpace="displayP3"/>
-                                            </backgroundConfiguration>
-                                            <color key="baseBackgroundColor" red="0.33725490200000002" green="0.23921568630000001" blue="0.74117647060000003" alpha="1" colorSpace="custom" customColorSpace="displayP3"/>
-                                        </buttonConfiguration>
                                         <connections>
-                                            <action selector="closeButtonTapped:" destination="3p0-fV-fhI" eventType="touchUpInside" id="vbR-CU-Mn9"/>
+                                            <action selector="micTapped:" destination="3p0-fV-fhI" eventType="touchUpInside" id="mic-act-001"/>
                                         </connections>
                                     </button>
+
                                 </subviews>
                                 <constraints>
                                     <constraint firstAttribute="height" constant="90" id="jFN-ui-aCw"/>

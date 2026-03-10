@@ -67,6 +67,11 @@ class HomeCollectionViewController: UICollectionViewController {
             forCellWithReuseIdentifier: ContinueJamCell.reuseID
         )
 
+        collectionView.register(
+            CallSessionCell.self,
+            forCellWithReuseIdentifier: CallSessionCell.reuseID
+        )
+
         collectionView.collectionViewLayout = createLayout()
         collectionView.backgroundColor = AppColors.screenBackground
 
@@ -292,7 +297,7 @@ class HomeCollectionViewController: UICollectionViewController {
 
             
         case .callSession:
-            header.titleLabel.text = "Start call session with"
+            header.titleLabel.text = "Start a session"
         case .recommended:
             header.titleLabel.text = "Recommended for you"
         }
@@ -390,10 +395,15 @@ class HomeCollectionViewController: UICollectionViewController {
 
         case .callSession:
             let cell = collectionView.dequeueReusableCell(
-                withReuseIdentifier: "CallSessionCell",
+                withReuseIdentifier: CallSessionCell.reuseID,
                 for: indexPath
             ) as! CallSessionCell
-            cell.configure(imageURL: "sparkles", labelText: "AI")
+            cell.configure(
+                icon: "phone.fill",
+                title: "AI Call Session",
+                subtitle: "Practice speaking with an AI coach",
+                iconBackground: AppColors.primary
+            )
             return cell
 
         case .recommended:
@@ -437,7 +447,7 @@ extension HomeCollectionViewController {
                     : self.nothingLayout()
                 
             case .callSession:
-                return self.fullWidthSection()
+                return self.callSessionSection()
 
             case .recommended:
                 return self.horizontalScrollingSection()
@@ -492,6 +502,39 @@ extension HomeCollectionViewController {
             layoutSize: NSCollectionLayoutSize(
                 widthDimension: .fractionalWidth(1.0),
                 heightDimension: .absolute(124)
+            )
+        )
+
+        let group = NSCollectionLayoutGroup.vertical(
+            layoutSize: item.layoutSize,
+            subitems: [item]
+        )
+
+        let section = NSCollectionLayoutSection(group: group)
+
+        let headerSize = NSCollectionLayoutSize(
+            widthDimension: .fractionalWidth(1.0),
+            heightDimension: .absolute(40)
+        )
+
+        let header = NSCollectionLayoutBoundarySupplementaryItem(
+            layoutSize: headerSize,
+            elementKind: UICollectionView.elementKindSectionHeader,
+            alignment: .top
+        )
+
+        section.boundarySupplementaryItems = [header]
+        section.contentInsets = NSDirectionalEdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16)
+
+        return section
+    }
+
+    func callSessionSection() -> NSCollectionLayoutSection {
+
+        let item = NSCollectionLayoutItem(
+            layoutSize: NSCollectionLayoutSize(
+                widthDimension: .fractionalWidth(1.0),
+                heightDimension: .absolute(76)
             )
         )
 
@@ -658,15 +701,11 @@ extension HomeCollectionViewController {
 
         case .callSession:
             // AI Speech Coach — launches the AI call flow
-            // BackendSpeechService handles analysis; no Gemini key required.
-            let storyboard = UIStoryboard(name: "AICall", bundle: nil)
-            guard let scoreVC = storyboard.instantiateInitialViewController() else {
-                print("AICall storyboard initial VC not found")
-                return
-            }
-            scoreVC.modalPresentationStyle = .fullScreen
-            scoreVC.modalTransitionStyle = .crossDissolve
-            present(scoreVC, animated: true)
+            // AICallController is fully programmatic (no storyboard).
+            let callVC = AICallController()
+            callVC.modalPresentationStyle = .fullScreen
+            callVC.modalTransitionStyle = .crossDissolve
+            present(callVC, animated: true)
 
         case .recommended:
 

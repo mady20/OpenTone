@@ -3,86 +3,430 @@
 //  OpenTone
 //
 //  Created by M S on 26/02/26.
+//  Rebuilt: Phase 1 — real feedback screen backed by BackendSpeechService.
 //
 
 import UIKit
 
-private let reuseIdentifier = "Cell"
+// MARK: - Section model
 
-class FeedbackCollectionViewController: UICollectionViewController {
+private enum FeedbackSection: Int, CaseIterable {
+    case loading = 0   // spinner while we wait for the backend
+    case scores        // overall / fluency / confidence / clarity rings
+    case metrics       // WPM, fillers, pauses, etc.
+    case coaching      // primary issue + suggestions
+    case progress      // deltas vs. previous session
+    case pronunciation // worst words
+}
+
+private let scoreCellId      = "ScoreCell"
+private let metricCellId     = "MetricCell"
+private let coachingCellId   = "CoachingCell"
+private let progressCellId   = "ProgressCell"
+private let pronCellId       = "PronCell"
+private let loadingCellId    = "LoadingCell"
+private let headerKind       = UICollectionView.elementKindSectionHeader
+private let headerReuseId    = "FeedbackHeader"
+
+// MARK: - Controller
+
+class FeedbackCollectionViewController: UIViewController {
+
+    // ---- Public properties set by the pushing screen (StartJamVC) ----------
+
+    var transcript: String?
+    var topic: String?
+    var speakingDuration: Double = 30
+    var sessionId: String = ""
+    var userId: String = "demo"
+    var audioURL: String?          // local file:// or remote URL
+
+    // ---- Private state -----------------------------------------------------
+
+    private var feedback: Feedback?
+    private var analysisResponse: SpeechAnalysisResponse?
+    private var isLoading = true
+    private var errorMessage: String?
+
+    private var collectionView: UICollectionView!
+
+    // MARK: - Lifecycle
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        title = "Session Feedback"
+        view.backgroundColor = AppColors.screenBackground
+        navigationItem.hidesBackButton = true
+        navigationItem.rightBarButtonItem = UIBarButtonItem(
+            title: "Done", style: .done, target: self, action: #selector(doneTapped)
+        )
 
-        // Uncomment the following line to preserve selection between presentations
-        // self.clearsSelectionOnViewWillAppear = false
-
-        // Register cell classes
-        self.collectionView!.register(UICollectionViewCell.self, forCellWithReuseIdentifier: reuseIdentifier)
-
-        // Do any additional setup after loading the view.
+        configureCollectionView()
+        fetchAnalysis()
     }
 
-    /*
-    // MARK: - Navigation
+    // MARK: - Layout
 
-    // In a storyboard-based application, you will often want to do a little preparation before navigation
-    override func prepare(for segue: UIStoryboardSegue, sender: Any?) {
-        // Get the new view controller using [segue destinationViewController].
-        // Pass the selected object to the new view controller.
-    }
-    */
+    private func configureCollectionView() {
+        let layout = createLayout()
+        collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: layout)
+        collectionView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        collectionView.backgroundColor = AppColors.screenBackground
+        collectionView.dataSource = self
+        collectionView.delegate = self
 
-    // MARK: UICollectionViewDataSource
+        // Register cells
+        collectionView.register(UICollectionViewCell.self, forCellWithReuseIdentifier: loadingCellId)
+        collectionView.register(UICollectionViewCell.self, forCellWithReuseIdentifier: scoreCellId)
+        collectionView.register(UICollectionViewCell.self, forCellWithReuseIdentifier: metricCellId)
+        collectionView.register(UICollectionViewCell.self, forCellWithReuseIdentifier: coachingCellId)
+        collectionView.register(UICollectionViewCell.self, forCellWithReuseIdentifier: progressCellId)
+        collectionView.register(UICollectionViewCell.self, forCellWithReuseIdentifier: pronCellId)
+        collectionView.register(
+            UICollectionReusableView.self,
+            forSupplementaryViewOfKind: headerKind,
+            withReuseIdentifier: headerReuseId
+        )
 
-    override func numberOfSections(in collectionView: UICollectionView) -> Int {
-        // #warning Incomplete implementation, return the number of sections
-        return 0
-    }
-
-
-    override func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
-        // #warning Incomplete implementation, return the number of items
-        return 0
-    }
-
-    override func collectionView(_ collectionView: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
-        let cell = collectionView.dequeueReusableCell(withReuseIdentifier: reuseIdentifier, for: indexPath)
-    
-        // Configure the cell
-    
-        return cell
+        view.addSubview(collectionView)
     }
 
-    // MARK: UICollectionViewDelegate
-
-    /*
-    // Uncomment this method to specify if the specified item should be highlighted during tracking
-    override func collectionView(_ collectionView: UICollectionView, shouldHighlightItemAt indexPath: IndexPath) -> Bool {
-        return true
-    }
-    */
-
-    /*
-    // Uncomment this method to specify if the specified item should be selected
-    override func collectionView(_ collectionView: UICollectionView, shouldSelectItemAt indexPath: IndexPath) -> Bool {
-        return true
-    }
-    */
-
-    /*
-    // Uncomment these methods to specify if an action menu should be displayed for the specified item, and react to actions performed on the item
-    override func collectionView(_ collectionView: UICollectionView, shouldShowMenuForItemAt indexPath: IndexPath) -> Bool {
-        return false
+    private func createLayout() -> UICollectionViewCompositionalLayout {
+        return UICollectionViewCompositionalLayout { sectionIndex, env in
+            guard let section = FeedbackSection(rawValue: sectionIndex) else {
+                return Self.listSection()
+            }
+            switch section {
+            case .loading:      return Self.listSection()
+            case .scores:       return Self.scoreGridSection()
+            case .metrics:      return Self.listSection()
+            case .coaching:     return Self.listSection()
+            case .progress:     return Self.listSection()
+            case .pronunciation: return Self.listSection()
+            }
+        }
     }
 
-    override func collectionView(_ collectionView: UICollectionView, canPerformAction action: Selector, forItemAt indexPath: IndexPath, withSender sender: Any?) -> Bool {
-        return false
+    private static func listSection() -> NSCollectionLayoutSection {
+        let item = NSCollectionLayoutItem(
+            layoutSize: .init(widthDimension: .fractionalWidth(1), heightDimension: .estimated(56))
+        )
+        let group = NSCollectionLayoutGroup.vertical(
+            layoutSize: .init(widthDimension: .fractionalWidth(1), heightDimension: .estimated(56)),
+            subitems: [item]
+        )
+        let section = NSCollectionLayoutSection(group: group)
+        section.contentInsets = .init(top: 8, leading: 16, bottom: 16, trailing: 16)
+        section.interGroupSpacing = 8
+        section.boundarySupplementaryItems = [headerItem()]
+        return section
     }
 
-    override func collectionView(_ collectionView: UICollectionView, performAction action: Selector, forItemAt indexPath: IndexPath, withSender sender: Any?) {
-    
+    private static func scoreGridSection() -> NSCollectionLayoutSection {
+        let item = NSCollectionLayoutItem(
+            layoutSize: .init(widthDimension: .fractionalWidth(0.5), heightDimension: .estimated(100))
+        )
+        let group = NSCollectionLayoutGroup.horizontal(
+            layoutSize: .init(widthDimension: .fractionalWidth(1), heightDimension: .estimated(100)),
+            subitems: [item, item]
+        )
+        group.interItemSpacing = .fixed(12)
+        let section = NSCollectionLayoutSection(group: group)
+        section.contentInsets = .init(top: 8, leading: 16, bottom: 16, trailing: 16)
+        section.interGroupSpacing = 12
+        section.boundarySupplementaryItems = [headerItem()]
+        return section
     }
-    */
 
+    private static func headerItem() -> NSCollectionLayoutBoundarySupplementaryItem {
+        return .init(
+            layoutSize: .init(widthDimension: .fractionalWidth(1), heightDimension: .estimated(36)),
+            elementKind: headerKind,
+            alignment: .top
+        )
+    }
+
+    // MARK: - Network
+
+    private func fetchAnalysis() {
+        isLoading = true
+        collectionView.reloadData()
+
+        Task {
+            do {
+                let response: SpeechAnalysisResponse
+
+                // Prefer multipart audio upload (Whisper + pronunciation)
+                if let urlString = audioURL,
+                   let fileURL = URL(string: urlString),
+                   FileManager.default.fileExists(atPath: fileURL.path) {
+                    response = try await BackendSpeechService.shared.analyzeAudio(
+                        fileURL:   fileURL,
+                        userId:    userId,
+                        sessionId: sessionId
+                    )
+                } else {
+                    // Fallback to text-only /analyze
+                    response = try await BackendSpeechService.shared.analyze(
+                        audioURL:   audioURL,
+                        transcript: transcript,
+                        durationS:  speakingDuration,
+                        userId:     userId,
+                        sessionId:  sessionId
+                    )
+                }
+
+                self.analysisResponse = response
+                self.feedback = BackendSpeechService.toFeedback(response)
+                self.isLoading = false
+                self.collectionView.reloadData()
+
+            } catch {
+                self.errorMessage = error.localizedDescription
+                self.isLoading = false
+                self.collectionView.reloadData()
+            }
+        }
+    }
+
+    // MARK: - Actions
+
+    @objc private func doneTapped() {
+        navigationController?.popToRootViewController(animated: true)
+    }
+
+    // MARK: - Cell helpers
+
+    private func makeCard(_ cell: UICollectionViewCell) {
+        cell.contentView.subviews.forEach { $0.removeFromSuperview() }
+        cell.contentView.backgroundColor = AppColors.cardBackground
+        cell.contentView.layer.cornerRadius = 14
+        cell.contentView.clipsToBounds = true
+    }
+
+    private func addLabel(to cell: UICollectionViewCell, text: String, font: UIFont = .systemFont(ofSize: 15),
+                          color: UIColor = .label, lines: Int = 0, insets: UIEdgeInsets = .init(top: 12, left: 14, bottom: 12, right: 14)) {
+        let lbl = UILabel()
+        lbl.text = text
+        lbl.font = font
+        lbl.textColor = color
+        lbl.numberOfLines = lines
+        lbl.translatesAutoresizingMaskIntoConstraints = false
+        cell.contentView.addSubview(lbl)
+        NSLayoutConstraint.activate([
+            lbl.topAnchor.constraint(equalTo: cell.contentView.topAnchor, constant: insets.top),
+            lbl.leadingAnchor.constraint(equalTo: cell.contentView.leadingAnchor, constant: insets.left),
+            lbl.trailingAnchor.constraint(equalTo: cell.contentView.trailingAnchor, constant: -insets.right),
+            lbl.bottomAnchor.constraint(equalTo: cell.contentView.bottomAnchor, constant: -insets.bottom),
+        ])
+    }
+
+    private func scoreCard(_ cell: UICollectionViewCell, title: String, value: Double) {
+        makeCard(cell)
+        let stack = UIStackView()
+        stack.axis = .vertical
+        stack.alignment = .center
+        stack.spacing = 4
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        cell.contentView.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: cell.contentView.topAnchor, constant: 14),
+            stack.bottomAnchor.constraint(equalTo: cell.contentView.bottomAnchor, constant: -14),
+            stack.leadingAnchor.constraint(equalTo: cell.contentView.leadingAnchor, constant: 8),
+            stack.trailingAnchor.constraint(equalTo: cell.contentView.trailingAnchor, constant: -8),
+        ])
+
+        let numLabel = UILabel()
+        numLabel.text = String(format: "%.0f", value)
+        numLabel.font = .systemFont(ofSize: 28, weight: .bold)
+        numLabel.textColor = AppColors.primary
+
+        let titleLabel = UILabel()
+        titleLabel.text = title
+        titleLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        titleLabel.textColor = .secondaryLabel
+
+        stack.addArrangedSubview(numLabel)
+        stack.addArrangedSubview(titleLabel)
+    }
+}
+
+// MARK: - UICollectionViewDataSource
+
+extension FeedbackCollectionViewController: UICollectionViewDataSource {
+
+    func numberOfSections(in collectionView: UICollectionView) -> Int {
+        if isLoading || errorMessage != nil { return 1 }     // loading / error
+        guard feedback != nil else { return 1 }
+        return FeedbackSection.allCases.count - 1            // skip .loading section
+    }
+
+    func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
+        if isLoading { return 1 }
+        if errorMessage != nil { return 1 }
+
+        // Map displayed section back (we skip .loading when data is ready)
+        let mapped = FeedbackSection(rawValue: section + 1) ?? .scores
+        guard let fb = feedback, let resp = analysisResponse else { return 0 }
+
+        switch mapped {
+        case .loading:       return 0
+        case .scores:        return 4   // overall, fluency, confidence, clarity
+        case .metrics:       return 4   // WPM, fillers, pauses, duration
+        case .coaching:      return 1 + min(fb.coaching?.suggestions.count ?? 0, 4)
+        case .progress:      return 1   // deltas card
+        case .pronunciation:
+            let count = resp.pronunciation?.worstWords.count ?? 0
+            return count > 0 ? min(count, 5) : 0
+        }
+    }
+
+    func collectionView(_ cv: UICollectionView, cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
+
+        // --- Loading / error state ---
+        if isLoading {
+            let cell = cv.dequeueReusableCell(withReuseIdentifier: loadingCellId, for: indexPath)
+            cell.contentView.subviews.forEach { $0.removeFromSuperview() }
+            let spinner = UIActivityIndicatorView(style: .large)
+            spinner.startAnimating()
+            spinner.translatesAutoresizingMaskIntoConstraints = false
+            cell.contentView.addSubview(spinner)
+            NSLayoutConstraint.activate([
+                spinner.centerXAnchor.constraint(equalTo: cell.contentView.centerXAnchor),
+                spinner.centerYAnchor.constraint(equalTo: cell.contentView.centerYAnchor),
+                spinner.heightAnchor.constraint(equalToConstant: 80),
+            ])
+            return cell
+        }
+        if let err = errorMessage {
+            let cell = cv.dequeueReusableCell(withReuseIdentifier: loadingCellId, for: indexPath)
+            makeCard(cell)
+            addLabel(to: cell, text: "⚠️ \(err)", font: .systemFont(ofSize: 14), color: .systemRed)
+            return cell
+        }
+
+        guard let fb = feedback, let resp = analysisResponse else {
+            return cv.dequeueReusableCell(withReuseIdentifier: loadingCellId, for: indexPath)
+        }
+
+        let mapped = FeedbackSection(rawValue: indexPath.section + 1) ?? .scores
+
+        switch mapped {
+
+        // --- Scores (2×2 grid) ---
+        case .scores:
+            let cell = cv.dequeueReusableCell(withReuseIdentifier: scoreCellId, for: indexPath)
+            let titles = ["Overall", "Fluency", "Confidence", "Clarity"]
+            let values: [Double] = [
+                fb.coaching?.scores.overall ?? 0,
+                fb.coaching?.scores.fluency ?? 0,
+                fb.coaching?.scores.confidence ?? 0,
+                fb.coaching?.scores.clarity ?? 0,
+            ]
+            scoreCard(cell, title: titles[indexPath.item], value: values[indexPath.item])
+            return cell
+
+        // --- Metrics ---
+        case .metrics:
+            let cell = cv.dequeueReusableCell(withReuseIdentifier: metricCellId, for: indexPath)
+            makeCard(cell)
+            let labels = [
+                "🗣  \(Int(fb.wordsPerMinute)) WPM",
+                "😬  \(fb.fillerWordCount ?? 0) filler words",
+                "⏸  \(fb.pauseCount ?? 0) long pauses",
+                "⏱  \(String(format: "%.0f", fb.durationInSeconds))s spoken",
+            ]
+            addLabel(to: cell, text: labels[indexPath.item], font: .systemFont(ofSize: 15, weight: .medium))
+            return cell
+
+        // --- Coaching ---
+        case .coaching:
+            let cell = cv.dequeueReusableCell(withReuseIdentifier: coachingCellId, for: indexPath)
+            makeCard(cell)
+            if indexPath.item == 0 {
+                // Primary issue header
+                let issue = fb.coaching?.primaryIssueTitle ?? "Good job!"
+                addLabel(to: cell, text: "🎯 Focus: \(issue)", font: .systemFont(ofSize: 16, weight: .semibold), color: AppColors.primary)
+            } else {
+                // Suggestion
+                let idx = indexPath.item - 1
+                let suggestions = fb.coaching?.suggestions ?? []
+                let text = idx < suggestions.count ? "💡 \(suggestions[idx])" : ""
+                addLabel(to: cell, text: text, font: .systemFont(ofSize: 14))
+            }
+            return cell
+
+        // --- Progress deltas ---
+        case .progress:
+            let cell = cv.dequeueReusableCell(withReuseIdentifier: progressCellId, for: indexPath)
+            makeCard(cell)
+            let prog = resp.progress
+            var parts: [String] = []
+            if let w = prog.deltas.wpmDescription      { parts.append(w) }
+            if let f = prog.deltas.fillersDescription   { parts.append(f) }
+            if let p = prog.deltas.pronunciationDescription { parts.append(p) }
+            let arrow = prog.directionArrow
+            let summary = parts.isEmpty ? "First session — baseline set!" : parts.joined(separator: "\n")
+            addLabel(to: cell, text: "\(arrow) \(prog.weeklySummary)\n\n\(summary)", font: .systemFont(ofSize: 14))
+            return cell
+
+        // --- Pronunciation worst words ---
+        case .pronunciation:
+            let cell = cv.dequeueReusableCell(withReuseIdentifier: pronCellId, for: indexPath)
+            makeCard(cell)
+            if let word = resp.pronunciation?.worstWords[safe: indexPath.item] {
+                let score = word.score.map { String(format: "%.0f%%", $0) } ?? "—"
+                addLabel(to: cell, text: "🔤 \"\(word.word)\" — \(score)  (\(word.categoryLabel))",
+                         font: .systemFont(ofSize: 14))
+            }
+            return cell
+
+        default:
+            return cv.dequeueReusableCell(withReuseIdentifier: loadingCellId, for: indexPath)
+        }
+    }
+
+    func collectionView(_ cv: UICollectionView,
+                        viewForSupplementaryElementOfKind kind: String,
+                        at indexPath: IndexPath) -> UICollectionReusableView {
+        let header = cv.dequeueReusableSupplementaryView(
+            ofKind: kind, withReuseIdentifier: headerReuseId, for: indexPath
+        )
+        header.subviews.forEach { $0.removeFromSuperview() }
+
+        if isLoading || errorMessage != nil {
+            return header  // no header during loading
+        }
+
+        let mapped = FeedbackSection(rawValue: indexPath.section + 1) ?? .scores
+        let titles: [FeedbackSection: String] = [
+            .scores: "Scores", .metrics: "Metrics", .coaching: "Coaching",
+            .progress: "Your Progress", .pronunciation: "Pronunciation",
+        ]
+
+        let lbl = UILabel()
+        lbl.text = titles[mapped] ?? ""
+        lbl.font = .systemFont(ofSize: 18, weight: .bold)
+        lbl.textColor = .label
+        lbl.translatesAutoresizingMaskIntoConstraints = false
+        header.addSubview(lbl)
+        NSLayoutConstraint.activate([
+            lbl.leadingAnchor.constraint(equalTo: header.leadingAnchor),
+            lbl.bottomAnchor.constraint(equalTo: header.bottomAnchor, constant: -4),
+        ])
+
+        return header
+    }
+}
+
+// MARK: - UICollectionViewDelegate
+
+extension FeedbackCollectionViewController: UICollectionViewDelegate {}
+
+// MARK: - Safe subscript
+
+private extension Collection {
+    subscript(safe index: Index) -> Element? {
+        indices.contains(index) ? self[index] : nil
+    }
 }

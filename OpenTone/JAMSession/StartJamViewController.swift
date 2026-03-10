@@ -18,6 +18,7 @@ class StartJamViewController: UIViewController {
     private var hintStackView: UIStackView?
     private var didFinishSpeech = false
     private var isMicOn = false
+    private var pulseLayer: CAShapeLayer?
 
     // MARK: - Speech Recognition
 
@@ -32,7 +33,6 @@ class StartJamViewController: UIViewController {
         super.viewDidLoad()
         timerManager.delegate = self
         navigationItem.hidesBackButton = true
-        // No back button — user must use the exit button
 
         // Load topic from active session
         if let session = JamSessionDataModel.shared.getActiveSession() {
@@ -42,6 +42,17 @@ class StartJamViewController: UIViewController {
 
         // Mark the speaking phase in the data model
         JamSessionDataModel.shared.beginSpeakingPhase()
+
+        // Add an invisible spacer to balance the stack: [hint] [mic] [spacer]
+        // This keeps the mic button centered.
+        let spacer = UIView()
+        spacer.translatesAutoresizingMaskIntoConstraints = false
+        spacer.isUserInteractionEnabled = false
+        bottomActionStackView.addArrangedSubview(spacer)
+        NSLayoutConstraint.activate([
+            spacer.widthAnchor.constraint(equalToConstant: 50),
+            spacer.heightAnchor.constraint(equalToConstant: 50),
+        ])
 
         applyDarkModeStyles()
 
@@ -97,6 +108,7 @@ class StartJamViewController: UIViewController {
         timerManager.reset()
         // Stop and clean up before leaving
         stopRecording()
+        stopPulseAnimation()
 
         guard var session = JamSessionDataModel.shared.getActiveSession() else { return }
         session.secondsLeft = remainingSeconds
@@ -106,10 +118,6 @@ class StartJamViewController: UIViewController {
     // MARK: - Navigation
 
     @objc private func backButtonTapped() {
-        showExitAlert()
-    }
-
-    @IBAction func closeButtonTapped(_ sender: UIButton) {
         showExitAlert()
     }
 
@@ -167,24 +175,78 @@ class StartJamViewController: UIViewController {
         } else {
             pauseRecording()
         }
-        updateMicButton(isActive: isMicOn)
+        updateMicButtonState()
     }
 
-    private func updateMicButton(isActive: Bool) {
-        let imageName = isActive ? "mic.fill" : "mic.slash.fill"
-        let tint      = isActive ? AppColors.primary : UIColor.systemRed
-        let bg        = isActive ? AppColors.primaryLight : UIColor.systemRed.withAlphaComponent(0.12)
-        let border    = isActive ? AppColors.primary.cgColor : UIColor.systemRed.cgColor
+    /// Single source of truth for mic button visuals + animation.
+    /// Works with UIButton.Configuration (set in storyboard).
+    private func updateMicButtonState() {
+        guard var config = micButton.configuration else { return }
 
-        micButton.setImage(UIImage(systemName: imageName), for: .normal)
-        micButton.tintColor        = tint
-        micButton.backgroundColor  = bg
-        micButton.layer.borderColor  = border
-        micButton.layer.borderWidth  = 2
-        micButton.layer.cornerRadius = micButton.bounds.height / 2
-        micButton.layer.shadowOpacity = 0.15
-        micButton.layer.shadowRadius  = 6
-        micButton.layer.shadowOffset  = CGSize(width: 0, height: 2)
+        let isActive = isMicOn
+        let imageName = isActive ? "mic.fill" : "mic.slash.fill"
+        let tint: UIColor  = isActive ? AppColors.primary : .systemRed
+        let bg: UIColor    = isActive ? AppColors.primaryLight : UIColor.systemRed.withAlphaComponent(0.12)
+        let border: UIColor = isActive ? AppColors.primary : .systemRed
+
+        config.image = UIImage(systemName: imageName)?
+            .withConfiguration(UIImage.SymbolConfiguration(scale: .large))
+        config.baseForegroundColor = tint
+        config.background.backgroundColor = bg
+        config.background.strokeColor = border
+        config.background.strokeWidth = isActive ? 3 : 1
+        micButton.configuration = config
+
+        // Pulse animation
+        if isActive {
+            startPulseAnimation()
+        } else {
+            stopPulseAnimation()
+        }
+    }
+
+    // MARK: - Pulse Animation
+
+    private func startPulseAnimation() {
+        stopPulseAnimation()
+
+        let diameter = micButton.bounds.width + 24
+        let pulse = CAShapeLayer()
+        let circularPath = UIBezierPath(
+            arcCenter: CGPoint(x: micButton.bounds.midX, y: micButton.bounds.midY),
+            radius: diameter / 2,
+            startAngle: 0,
+            endAngle: 2 * .pi,
+            clockwise: true
+        )
+        pulse.path = circularPath.cgPath
+        pulse.fillColor = AppColors.primary.withAlphaComponent(0.25).cgColor
+        pulse.opacity = 0
+
+        micButton.layer.insertSublayer(pulse, at: 0)
+        pulseLayer = pulse
+
+        let scaleAnim = CABasicAnimation(keyPath: "transform.scale")
+        scaleAnim.fromValue = 0.85
+        scaleAnim.toValue   = 1.15
+
+        let opacityAnim = CABasicAnimation(keyPath: "opacity")
+        opacityAnim.fromValue = 0.6
+        opacityAnim.toValue   = 0.0
+
+        let group = CAAnimationGroup()
+        group.animations = [scaleAnim, opacityAnim]
+        group.duration     = 1.2
+        group.repeatCount  = .infinity
+        group.timingFunction = CAMediaTimingFunction(name: .easeOut)
+
+        pulse.add(group, forKey: "pulse")
+    }
+
+    private func stopPulseAnimation() {
+        pulseLayer?.removeAllAnimations()
+        pulseLayer?.removeFromSuperlayer()
+        pulseLayer = nil
     }
 
     @IBAction func hintTapped(_ sender: UIButton) {
@@ -285,7 +347,7 @@ class StartJamViewController: UIViewController {
         AudioManager.shared.startRecording()
         hasStartedRecording = true
         isMicOn = true
-        updateMicButtonAppearance()
+        updateMicButtonState()
     }
 
     private func pauseRecording() {
@@ -296,18 +358,7 @@ class StartJamViewController: UIViewController {
         AudioManager.shared.stopRecording()
     }
 
-    private func updateMicButtonAppearance() {
-        // Update the explicit micButton outlet if available
-        DispatchQueue.main.async {
-            if self.isMicOn {
-                self.micButton.setImage(UIImage(systemName: "mic.fill"), for: .normal)
-                self.micButton.tintColor = AppColors.primary
-            } else {
-                self.micButton.setImage(UIImage(systemName: "mic.slash.fill"), for: .normal)
-                self.micButton.tintColor = .systemRed
-            }
-        }
-    }
+
 
 }
 
@@ -335,6 +386,7 @@ extension StartJamViewController: TimerManagerDelegate {
         // Note: The feedback screen uploads the audio file to Whisper via /analyze/audio
         // to get the transcript, metrics, and coaching.
         stopRecording()
+        stopPulseAnimation()
 
         timerLabel.text = "00:00"
 
@@ -351,7 +403,7 @@ extension StartJamViewController: TimerManagerDelegate {
             speakingDuration = 30.0
         }
           
-        let vc =  FeedbackCollectionViewController(coder: )
+        let vc = FeedbackCollectionViewController()
         vc.transcript       = nil
         vc.topic            = session.topic
         vc.speakingDuration = speakingDuration

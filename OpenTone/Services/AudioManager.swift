@@ -70,7 +70,9 @@ final class AudioManager {
         currentTranscription = ""
 
         let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.record, mode: .measurement, options: [.duckOthers])
+        // Use playAndRecord so callers (like AICallController) don't need to switch
+        // categories between recording and playback — avoids audio session conflicts.
+        try? session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetoothA2DP])
         try? session.setActive(true, options: .notifyOthersOnDeactivation)
 
         // Setup tap for amplitude tracking if needed by callers, 
