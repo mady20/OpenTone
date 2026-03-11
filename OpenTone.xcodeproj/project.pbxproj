@@ -13,6 +13,7 @@
 
 /* Begin PBXFileReference section */
 		3FBEA97B2ED55D6300788555 /* OpenTone.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = OpenTone.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA000001SECRETS000000001 /* Secrets.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Secrets.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -154,6 +155,7 @@
 /* Begin XCBuildConfiguration section */
 		3FAE42052EC43B6000FADCC1 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = AA000001SECRETS000000001 /* Secrets.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
@@ -192,6 +194,7 @@
 		};
 		3FAE42062EC43B6000FADCC1 /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = AA000001SECRETS000000001 /* Secrets.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;

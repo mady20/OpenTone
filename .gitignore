@@ -1,29 +1,88 @@
-backend
+# ==============================
+# macOS
+# ==============================
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# ==============================
 # Xcode build artifacts
+# ==============================
 build/
 DerivedData/
+*.ipa
+*.dSYM.zip
+*.dSYM
 
-# Xcode user data
+# Xcode user data (machine-specific)
 *.xcuserstate
 xcuserdata/
 
+# ==============================
 # Swift Package Manager
+# ==============================
 .swiftpm/
 .build/
 
-# macOS system files
-.DS_Store
+# ==============================
+# iOS Secrets (xcconfig with real keys)
+# ==============================
+Secrets.xcconfig
 
-# Other editor or temp files
-*.swp
-*.lock
-*.tmp
-*.bak
-*.idea/
-.vscode/
-
-# Optional: If you later add dependencies
+# ==============================
+# CocoaPods / Carthage / Fastlane (uncomment if used)
+# ==============================
 # Pods/
 # Carthage/
-# fastlane/
+# fastlane/report.xml
+# fastlane/Preview.html
+# fastlane/screenshots/
+# fastlane/test_output/
+
+# ==============================
+# Python / Backend
+# ==============================
+
+# Virtual environments
+backend/.venv/
+backend/venv/
+backend/env/
+backend/.env
+
+# Byte-compiled / optimised / DLL files
+**/__pycache__/
+**/*.py[cod]
+**/.*py[cod]
+*.egg-info/
+*.egg
+
+# pytest / coverage
+backend/.pytest_cache/
+backend/.coverage
+backend/htmlcov/
+
+# ML model weights (download separately — see backend/README.md)
+backend/models/whisper/
+backend/models/kokoro/
+backend/models/huggingface/
+backend/models/nltk_data/
+
+# User data with PII
+backend/data/speech_profiles.json
+
+# ==============================
+# Editor / IDE / Temp files
+# ==============================
+*.swp
+*.swo
+*.tmp
+*.bak
+*.orig
+.idea/
+.vscode/
+
+# ==============================
+# Miscellaneous
+# ==============================
 ARCHITECTURE_ANALYSIS.md
