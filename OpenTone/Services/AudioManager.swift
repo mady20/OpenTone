@@ -138,7 +138,6 @@ final class AudioManager {
              audioEngine.stop()
         }
         audioEngine.inputNode.removeTap(onBus: 0)
-        isRecording = false
     }
 }
 

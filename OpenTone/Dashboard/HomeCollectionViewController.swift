@@ -176,13 +176,16 @@ class HomeCollectionViewController: UICollectionViewController {
             weeklyMinutes.append(StreakDataModel.shared.totalMinutes(for: date))
         }
 
+        let completedCount = HistoryDataModel.shared.getAllActivities().count
+
         return ProgressCellData(
             streakDays: streakDays,
             todayMinutes: todayMinutes,
             dailyGoalMinutes: dailyGoal,
             weeklyMinutes: weeklyMinutes,
             speechProfile: cachedSpeechProfile,
-            lastWpmDelta: lastWpmDelta
+            lastWpmDelta: lastWpmDelta,
+            hasCompletedSessions: completedCount > 0
         )
     }
 

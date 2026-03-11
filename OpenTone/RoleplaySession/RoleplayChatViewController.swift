@@ -47,6 +47,7 @@ class RoleplayChatViewController: UIViewController {
 
     private var isProcessingResponse = false
     private var isMuted = false
+    private var isSpeaking = false
 
     private var audioPlayer: AVAudioPlayer?
 
@@ -126,6 +127,10 @@ class RoleplayChatViewController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
 
         if !didLoadChat {
             didLoadChat = true
@@ -325,35 +330,43 @@ class RoleplayChatViewController: UIViewController {
 
     private func speakText(_ text: String) {
         guard !isMuted else { return }
+        guard !isSpeaking else { return }  // prevent overlapping audio
+        isSpeaking = true
 
-        // Stop any ongoing recording while TTS plays
+        // Stop any ongoing recording WITHOUT auto-transcribe to prevent
+        // the callback → userResponded → advanceSession → speakText loop
         if AudioManager.shared.isRecording {
-            AudioManager.shared.stopRecording()
+            AudioManager.shared.stopRecording(autoTranscribe: false)
         }
 
         Task {
             do {
                 let audioData = try await BackendSpeechService.shared.tts(text: text)
                 
-                // Switch thread to play back
                 await MainActor.run {
-                    guard !self.isMuted else { return }
+                    guard !self.isMuted else {
+                        self.isSpeaking = false
+                        return
+                    }
                     
                     let session = AVAudioSession.sharedInstance()
                     try? session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
                     try? session.setActive(true)
                     
                     do {
+                        self.audioPlayer?.stop()  // stop any leftover playback
                         self.audioPlayer = try AVAudioPlayer(data: audioData)
                         self.audioPlayer?.delegate = self
                         self.audioPlayer?.prepareToPlay()
                         self.audioPlayer?.play()
                     } catch {
                         print("Roleplay Audio Player Error: \(error)")
+                        self.isSpeaking = false
                     }
                 }
             } catch {
                 print("Roleplay TTS Error: \(error)")
+                await MainActor.run { self.isSpeaking = false }
             }
         }
     }
@@ -494,9 +507,17 @@ class RoleplayChatViewController: UIViewController {
 
         SessionProgressManager.shared.markCompleted(.roleplay, topic: scenario.title, actualDurationMinutes: actualMinutes)
 
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            self.presentScoreScreen()
-        }
+        // Build user transcript from conversation history
+        let userTranscript = llmHistory
+            .filter { $0.role == .user }
+            .map { $0.text }
+            .joined(separator: " ")
+
+        fetchEndSessionFeedback(
+            userTranscript: userTranscript,
+            durationSeconds: seconds,
+            delayBeforePresent: 1.0
+        )
     }
 
     // MARK: - Scripted response flow
@@ -542,9 +563,17 @@ class RoleplayChatViewController: UIViewController {
 
             SessionProgressManager.shared.markCompleted(.roleplay, topic: scenario.title, actualDurationMinutes: actualMinutes)
 
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) {
-                self.presentScoreScreen()
-            }
+            // Build user transcript from the scripted user messages
+            let userTranscript = messages
+                .filter { $0.sender == .user }
+                .map { $0.text }
+                .joined(separator: " ")
+
+            fetchEndSessionFeedback(
+                userTranscript: userTranscript,
+                durationSeconds: seconds,
+                delayBeforePresent: 0.8
+            )
         }
     }
 
@@ -649,6 +678,60 @@ class RoleplayChatViewController: UIViewController {
         loadCurrentStep()
     }
 
+    // MARK: - End-session feedback
+
+    /// Fetch comprehensive feedback from the backend and present feedback screen.
+    /// Falls back to the basic ScoreViewController if the backend call fails.
+    private func fetchEndSessionFeedback(
+        userTranscript: String,
+        durationSeconds: Double,
+        delayBeforePresent: Double
+    ) {
+        let userId = UserDataModel.shared.getCurrentUser()?.id.uuidString ?? "demo"
+        let sessionId = session.id.uuidString
+        let lastAudioData: Data? = {
+            guard let url = AudioManager.shared.lastRecordingURL else { return nil }
+            return try? Data(contentsOf: url)
+        }()
+
+        Task {
+            do {
+                let response = try await BackendSpeechService.shared.endSession(
+                    lastAudioData: lastAudioData,
+                    fullTranscript: userTranscript,
+                    totalDurationS: durationSeconds,
+                    userId: userId,
+                    sessionId: sessionId,
+                    turnSummaries: [],
+                    mode: "roleplay"
+                )
+
+                await MainActor.run {
+                    // Present feedback VC instead of simple score screen
+                    let feedbackVC = FeedbackCollectionViewController()
+                    feedbackVC.transcript = userTranscript
+                    feedbackVC.topic = scenario.title
+                    feedbackVC.speakingDuration = durationSeconds
+                    feedbackVC.sessionId = sessionId
+                    feedbackVC.userId = userId
+                    feedbackVC.preloadedResponse = response
+
+                    let nav = UINavigationController(rootViewController: feedbackVC)
+                    nav.modalPresentationStyle = .fullScreen
+                    self.present(nav, animated: true)
+                }
+            } catch {
+                print("❌ Roleplay end-session feedback failed: \(error.localizedDescription)")
+                await MainActor.run {
+                    // Fall back to basic score screen
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delayBeforePresent) {
+                        self.presentScoreScreen()
+                    }
+                }
+            }
+        }
+    }
+
     private func presentScoreScreen() {
         audioPlayer?.stop()
 
@@ -676,9 +759,10 @@ class RoleplayChatViewController: UIViewController {
 
 extension RoleplayChatViewController: AVAudioPlayerDelegate {
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        // Reset audio session for recording after TTS finishes
+        isSpeaking = false
+        // Keep playAndRecord so both mic recording and future TTS work without session conflicts
         let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.record, mode: .measurement, options: [.duckOthers])
+        try? session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
         try? session.setActive(true)
     }
 }

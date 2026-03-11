@@ -60,7 +60,8 @@ class HistoryDataModel {
         imageURL: String,
         xpEarned: Int = 5,
         isCompleted: Bool = true,
-        scenarioId: UUID? = nil
+        scenarioId: UUID? = nil,
+        feedback: SessionFeedback? = nil
     ) {
         let activity = Activity(
             type: type,
@@ -71,7 +72,7 @@ class HistoryDataModel {
             isCompleted: isCompleted,
             title: title,
             imageURL: imageURL,
-            scenarioId: scenarioId
+            feedback: feedback, scenarioId: scenarioId
         )
         addActivity(activity)
     }
@@ -81,6 +82,34 @@ class HistoryDataModel {
         Task {
             await deleteAllActivitiesFromSupabase()
         }
+    }
+
+    /// Attach feedback to the most recent activity matching the given session type.
+    /// Used by FeedbackCollectionViewController after the backend analysis completes.
+    func attachFeedbackToLatestActivity(type: ActivityType, feedback: SessionFeedback) {
+        guard let index = activities.lastIndex(where: { $0.type == type && $0.feedback == nil }) else {
+            return
+        }
+
+        // Create a new Activity with the feedback attached
+        let old = activities[index]
+        let updated = Activity(
+            type: old.type,
+            date: old.date,
+            topic: old.topic,
+            duration: old.duration,
+            xpEarned: old.xpEarned,
+            isCompleted: old.isCompleted,
+            title: old.title,
+            imageURL: old.imageURL,
+            roleplaySession: old.roleplaySession,
+            feedback: feedback,
+            scenarioId: old.scenarioId
+        )
+        // Preserve the original ID
+        var mutableUpdated = updated
+        mutableUpdated.setID(old.id)
+        activities[index] = mutableUpdated
     }
 
     // MARK: - Supabase Operations

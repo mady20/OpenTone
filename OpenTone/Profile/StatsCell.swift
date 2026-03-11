@@ -55,7 +55,10 @@ final class StatsCell: UICollectionViewCell {
         label.textAlignment = .center
     }
     
-    func configure( roleplays: Int, jams: Int) {
+    func configure(calls: Int, roleplays: Int, jams: Int) {
+        callsValueLabel.text = "\(calls)"
+        callsTitleLabel.text = "Calls"
+
         roleplaysValueLabel.text = "\(roleplays)"
         roleplaysTitleLabel.text = "Roleplays"
 

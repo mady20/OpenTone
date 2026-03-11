@@ -3,6 +3,13 @@ import AVFoundation
 import AVFAudio
 import Speech
 
+// MARK: - DisplayLinkProxy (prevents CADisplayLink → VC retain cycle)
+private final class DisplayLinkProxy {
+    weak var target: AICallController?
+    init(target: AICallController) { self.target = target }
+    @objc func step(_ link: CADisplayLink) { target?.updateAnimation() }
+}
+
 final class AICallController: UIViewController {
 
     // MARK: - State Machine
@@ -33,9 +40,15 @@ final class AICallController: UIViewController {
     private let silenceThreshold: TimeInterval = 2.0
     private let maxListenDuration: TimeInterval = 30.0  // safety cap
 
+    /// Cached audio from the last failed turn — enables tap-to-retry.
+    private var lastFailedAudioData: Data?
+    private var isRetrying = false
+    private var isClosing = false
+
     // MARK: - Ring Animation
 
     private var displayLink: CADisplayLink?
+    private var displayLinkProxy: DisplayLinkProxy?
     private let ringLayer = CAShapeLayer()
     private let pulseLayer = CAShapeLayer()
 
@@ -60,7 +73,7 @@ final class AICallController: UIViewController {
         tv.translatesAutoresizingMaskIntoConstraints = false
         tv.backgroundColor = .clear
         tv.separatorStyle = .none
-        tv.allowsSelection = false
+        tv.allowsSelection = true
         tv.showsVerticalScrollIndicator = false
         tv.contentInset = UIEdgeInsets(top: 8, left: 0, bottom: 8, right: 0)
         return tv
@@ -78,10 +91,16 @@ final class AICallController: UIViewController {
     }
 
     private var chatBubbles: [ChatBubble] = []
+    private var sessionTurnSummaries: [SessionTurnSummary] = []
+    private var userTranscriptParts: [String] = []
+    private var hasStartedConversation = false
 
     /// Conversation history sent to Ollama (/chat endpoint treats text turns).
     /// Each entry: ["role": "user"|"assistant", "content": "…"]
     private var conversationHistory: [[String: String]] = []
+
+    /// Timestamp when the call started — used to compute call duration.
+    private var callStartDate: Date = Date()
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -98,7 +117,7 @@ final class AICallController: UIViewController {
         startDisplayLink()
         AudioManager.shared.requestPermissions { [weak self] granted in
             guard let self, granted else { return }
-            self.startListening()
+            self.beginSession()
         }
     }
 
@@ -222,11 +241,13 @@ final class AICallController: UIViewController {
     }
 
     private func startDisplayLink() {
-        displayLink = CADisplayLink(target: self, selector: #selector(updateAnimation))
+        let proxy = DisplayLinkProxy(target: self)
+        displayLinkProxy = proxy
+        displayLink = CADisplayLink(target: proxy, selector: #selector(DisplayLinkProxy.step(_:)))
         displayLink?.add(to: .main, forMode: .common)
     }
 
-    @objc private func updateAnimation() {
+    @objc func updateAnimation() {
         let targetExpansion: CGFloat
         switch currentState {
         case .listening:
@@ -263,6 +284,7 @@ final class AICallController: UIViewController {
     // MARK: - Permissions & Audio Session
 
     private func teardownAudio() {
+        AudioManager.shared.onAudioBuffer = nil
         if AudioManager.shared.isRecording {
             AudioManager.shared.stopRecording(autoTranscribe: false)
         }
@@ -349,7 +371,8 @@ final class AICallController: UIViewController {
         let db = 20 * log10(max(rms, 0.000_001))
         let normalized = max(0, min(1, (db + 50) / 50)) // 0.0 to 1.0
 
-        DispatchQueue.main.async {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
             self.smoothedLevel += (CGFloat(normalized) - self.smoothedLevel) * self.smoothingFactor
             
             // Voice detected — mark as spoken and reset silence timer
@@ -362,8 +385,61 @@ final class AICallController: UIViewController {
 
     // MARK: - Backend Integration
 
+    private func beginSession() {
+        guard !hasStartedConversation else { return }
+        hasStartedConversation = true
+        isProcessing = true
+        currentState = .processing
+
+        Task {
+            do {
+                let response = try await BackendSpeechService.shared.startChat(
+                    mode: "call",
+                    scenario: "Open Conversation",
+                    difficulty: "medium"
+                )
+
+                await MainActor.run {
+                    let aiText = response.message.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !aiText.isEmpty {
+                        self.conversationHistory.append(["role": "assistant", "content": aiText])
+                        self.addBubble(ChatBubble(sender: .ai, text: aiText))
+                    }
+
+                    if let audioData = Data(base64Encoded: response.audioWavB64), !audioData.isEmpty {
+                        self.speakAI(audioData: audioData)
+                    } else {
+                        self.isProcessing = false
+                        self.startListening()
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    let fallback = "Hi! I'm ready to chat with you. How has your day been so far?"
+                    self.conversationHistory.append(["role": "assistant", "content": fallback])
+                    self.addBubble(ChatBubble(sender: .ai, text: fallback))
+
+                    // Try to speak the fallback via backend TTS
+                    Task { [weak self] in
+                        guard let self else { return }
+                        if let audioData = try? await BackendSpeechService.shared.tts(text: fallback), !audioData.isEmpty {
+                            await MainActor.run { [weak self] in self?.speakAI(audioData: audioData) }
+                        } else {
+                            // TTS also failed — just start listening
+                            await MainActor.run { [weak self] in
+                                guard let self else { return }
+                                self.isProcessing = false
+                                self.startListening()
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private func handleSilenceDetected() {
-        guard !isProcessing else { return }  // prevent re-entry
+        guard !isProcessing, !isClosing else { return }  // prevent re-entry & post-close work
         isProcessing = true
 
         stopListening()
@@ -395,6 +471,21 @@ final class AICallController: UIViewController {
                     if !userText.isEmpty {
                         self.addBubble(ChatBubble(sender: .user, text: userText))
                         self.conversationHistory.append(["role": "user", "content": userText])
+                        self.userTranscriptParts.append(userText)
+                        self.sessionTurnSummaries.append(
+                            SessionTurnSummary(
+                                transcript: userText,
+                                totalWords: response.metrics.totalWords,
+                                durationS: response.metrics.durationS,
+                                fillers: response.metrics.fillers,
+                                pauses: response.metrics.pauses,
+                                avgPauseS: response.metrics.avgPauseS,
+                                veryLongPauses: response.metrics.veryLongPauses,
+                                repetitions: response.metrics.repetitions,
+                                fillerExamples: response.metrics.fillerExamples,
+                                pauseExamples: response.metrics.pauseExamples
+                            )
+                        )
                     }
                     
                     // Use the LLM's conversational reply; fall back to coaching only if empty
@@ -414,7 +505,86 @@ final class AICallController: UIViewController {
             } catch {
                 await MainActor.run {
                     print("❌ Backend error:", error.localizedDescription)
-                    let msg = "Sorry, I had trouble hearing you. Could you try again?"
+                    // Cache the audio so the user can retry this turn
+                    self.lastFailedAudioData = data
+                    self.isRetrying = false
+                    let msg = "⚠️ Connection issue — tap here to retry, or keep talking."
+                    self.addBubble(ChatBubble(sender: .ai, text: msg))
+                    self.isProcessing = false
+                    self.restartListening()
+                }
+            }
+        }
+    }
+
+    /// Retry the last failed conversation turn using cached audio data.
+    private func retryLastTurn() {
+        guard let cachedAudio = lastFailedAudioData, !isRetrying else { return }
+        isRetrying = true
+        lastFailedAudioData = nil
+        isProcessing = true
+        stopListening()
+        currentState = .processing
+
+        // Remove the retry-prompt bubble
+        if let last = chatBubbles.last, last.sender == .ai, last.text.contains("tap here to retry") {
+            chatBubbles.removeLast()
+            tableView.deleteRows(at: [IndexPath(row: chatBubbles.count, section: 0)], with: .fade)
+        }
+
+        Task {
+            do {
+                let userId = UserDataModel.shared.getCurrentUser()?.id.uuidString ?? "demo"
+                let response = try await BackendSpeechService.shared.analyzeChat(
+                    audioData: cachedAudio,
+                    userId: userId,
+                    mode: "call",
+                    scenario: "Open Conversation",
+                    difficulty: "medium",
+                    conversationHistory: conversationHistory
+                )
+
+                await MainActor.run {
+                    self.isRetrying = false
+                    let userText = response.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !userText.isEmpty {
+                        self.addBubble(ChatBubble(sender: .user, text: userText))
+                        self.conversationHistory.append(["role": "user", "content": userText])
+                        self.userTranscriptParts.append(userText)
+                        self.sessionTurnSummaries.append(
+                            SessionTurnSummary(
+                                transcript: userText,
+                                totalWords: response.metrics.totalWords,
+                                durationS: response.metrics.durationS,
+                                fillers: response.metrics.fillers,
+                                pauses: response.metrics.pauses,
+                                avgPauseS: response.metrics.avgPauseS,
+                                veryLongPauses: response.metrics.veryLongPauses,
+                                repetitions: response.metrics.repetitions,
+                                fillerExamples: response.metrics.fillerExamples,
+                                pauseExamples: response.metrics.pauseExamples
+                            )
+                        )
+                    }
+
+                    let aiText = response.llmReply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? (response.coaching.llmCoaching?.improvedSentence ?? "Could you say that again?")
+                        : response.llmReply
+                    self.conversationHistory.append(["role": "assistant", "content": aiText])
+                    self.addBubble(ChatBubble(sender: .ai, text: aiText))
+
+                    if let audioData = Data(base64Encoded: response.audioWavB64), !audioData.isEmpty {
+                        self.speakAI(audioData: audioData)
+                    } else {
+                        self.isProcessing = false
+                        self.restartListening()
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self.isRetrying = false
+                    self.lastFailedAudioData = cachedAudio
+                    let msg = "Still having trouble — tap here to retry or keep talking."
                     self.addBubble(ChatBubble(sender: .ai, text: msg))
                     self.isProcessing = false
                     self.restartListening()
@@ -432,11 +602,34 @@ final class AICallController: UIViewController {
 
         currentState = .speaking
 
+        // Configure audio session BEFORE playing — the very first greeting
+        // fires before startListening() ever runs, so the session may not
+        // be set to .playAndRecord yet.
+        let session = AVAudioSession.sharedInstance()
+        try? session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetoothA2DP])
+        try? session.setActive(true)
+
         do {
-            // Audio session already set to .playAndRecord in startListening — no switch needed
             audioPlayer = try AVAudioPlayer(data: audioData)
             audioPlayer?.delegate = self
-            audioPlayer?.play()
+            audioPlayer?.prepareToPlay()
+
+            guard audioPlayer?.play() == true else {
+                print("⚠️ Audio player play() returned false")
+                isProcessing = false
+                restartListening()
+                return
+            }
+
+            // Safety: if the delegate never fires (e.g. corrupted audio), force-start listening
+            let safeDuration = (audioPlayer?.duration ?? 5.0) + 3.0
+            DispatchQueue.main.asyncAfter(deadline: .now() + safeDuration) { [weak self] in
+                guard let self, self.currentState == .speaking else { return }
+                print("⚠️ Audio delegate timeout — forcing transition to listening")
+                self.audioPlayer?.stop()
+                self.isProcessing = false
+                self.restartListening()
+            }
         } catch {
             print("❌ Audio Player setup failed:", error)
             isProcessing = false
@@ -464,10 +657,258 @@ final class AICallController: UIViewController {
     }
 
     @objc private func closeTapped() {
+        guard !isClosing else { return }
+        isClosing = true
+        muteButton.isEnabled = false
+        closeButton.isEnabled = false
+        displayLink?.invalidate()
+        displayLink = nil
+
         audioPlayer?.stop()
         teardownAudio()
+
+        let turnSummaries = sessionTurnSummaries
+        sessionTurnSummaries = []
+
+        let duration = Date().timeIntervalSince(callStartDate)
+        guard duration > 1, let user = UserDataModel.shared.getCurrentUser() else {
+            conversationHistory.removeAll()
+            userTranscriptParts.removeAll()
+            dismiss(animated: true)
+            return
+        }
+
+        let userId = user.id
+
+        // Persist call record to Supabase
+        CallRecordDataModel.shared.logCall(
+            userId: userId,
+            duration: duration
+        )
+
+        // Mark session completed for streak/XP tracking
+        SessionProgressManager.shared.markCompleted(
+            .aiCall,
+            topic: "Open Conversation",
+            actualDurationMinutes: max(1, Int(duration) / 60)
+        )
+
+        // Build the full user transcript from preserved user turns.
+        let fullTranscript = userTranscriptParts.joined(separator: " ")
+
+        guard !fullTranscript.isEmpty || !turnSummaries.isEmpty else {
+            conversationHistory.removeAll()
+            userTranscriptParts.removeAll()
+            dismiss(animated: true)
+            return
+        }
+
+        // Get last audio data for session analysis
+        let lastAudioData: Data? = {
+            guard let url = AudioManager.shared.lastRecordingURL else { return nil }
+            return try? Data(contentsOf: url)
+        }()
+
+        let sessionId = UUID().uuidString
         conversationHistory.removeAll()
-        dismiss(animated: true)
+        userTranscriptParts.removeAll()
+
+        // Call the end-session endpoint for comprehensive feedback
+        currentState = .processing
+        Task {
+            do {
+                let response = try await BackendSpeechService.shared.endSession(
+                    lastAudioData: lastAudioData,
+                    fullTranscript: fullTranscript,
+                    totalDurationS: duration,
+                    userId: userId.uuidString,
+                    sessionId: sessionId,
+                    turnSummaries: turnSummaries,
+                    mode: "call"
+                )
+
+                // Create SessionFeedback and log to history
+                let sessionFeedback = BackendSpeechService.toSessionFeedback(
+                    response,
+                    sessionId: UUID(uuidString: sessionId) ?? UUID()
+                )
+
+                await MainActor.run {
+                    HistoryDataModel.shared.logActivity(
+                        type: .aiCall,
+                        title: "AI Call",
+                        topic: "Open Conversation",
+                        duration: max(1, Int(duration) / 60),
+                        imageURL: "Call",
+                        xpEarned: 10,
+                        isCompleted: true,
+                        feedback: sessionFeedback
+                    )
+
+                    // Present feedback screen
+                    let feedbackVC = FeedbackCollectionViewController()
+                    feedbackVC.transcript = fullTranscript
+                    feedbackVC.topic = "AI Call"
+                    feedbackVC.speakingDuration = duration
+                    feedbackVC.sessionId = sessionId
+                    feedbackVC.userId = userId.uuidString
+
+                    // Inject the pre-fetched response so FeedbackVC doesn't re-fetch
+                    feedbackVC.preloadedResponse = response
+
+                    let nav = UINavigationController(rootViewController: feedbackVC)
+                    nav.modalPresentationStyle = .fullScreen
+                    // Present feedback from the presenting VC so dismissing it
+                    // doesn't land the user back on the dead call screen.
+                    if let presenter = self.presentingViewController {
+                        self.dismiss(animated: false) {
+                            presenter.present(nav, animated: true)
+                        }
+                    } else {
+                        self.present(nav, animated: true)
+                    }
+                }
+
+            } catch {
+                print("❌ End-session feedback failed: \(error.localizedDescription)")
+                await MainActor.run {
+                    // Build fallback feedback from locally-collected turn summaries
+                    let fallbackFeedback = self.buildLocalFallbackFeedback(
+                        turnSummaries: turnSummaries,
+                        fullTranscript: fullTranscript,
+                        duration: duration,
+                        sessionId: sessionId
+                    )
+
+                    HistoryDataModel.shared.logActivity(
+                        type: .aiCall,
+                        title: "AI Call",
+                        topic: "Open Conversation",
+                        duration: max(1, Int(duration) / 60),
+                        imageURL: "Call",
+                        xpEarned: 10,
+                        isCompleted: true,
+                        feedback: fallbackFeedback
+                    )
+
+                    // Still show the feedback screen with locally-computed data
+                    let fallbackResponse = self.buildLocalFallbackResponse(
+                        turnSummaries: turnSummaries,
+                        fullTranscript: fullTranscript,
+                        duration: duration
+                    )
+
+                    let feedbackVC = FeedbackCollectionViewController()
+                    feedbackVC.transcript = fullTranscript
+                    feedbackVC.topic = "AI Call"
+                    feedbackVC.speakingDuration = duration
+                    feedbackVC.sessionId = sessionId
+                    feedbackVC.userId = userId.uuidString
+                    feedbackVC.preloadedResponse = fallbackResponse
+
+                    let nav = UINavigationController(rootViewController: feedbackVC)
+                    nav.modalPresentationStyle = .fullScreen
+                    if let presenter = self.presentingViewController {
+                        self.dismiss(animated: false) {
+                            presenter.present(nav, animated: true)
+                        }
+                    } else {
+                        self.present(nav, animated: true)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Local Fallback Helpers
+
+    /// Build a SessionFeedback from locally-collected turn summaries when the backend is unreachable.
+    private func buildLocalFallbackFeedback(
+        turnSummaries: [SessionTurnSummary],
+        fullTranscript: String,
+        duration: TimeInterval,
+        sessionId: String
+    ) -> SessionFeedback {
+        let totalFillers = turnSummaries.reduce(0) { $0 + $1.fillers }
+        let totalPauses = turnSummaries.reduce(0) { $0 + $1.pauses }
+        let totalWords = turnSummaries.reduce(0) { $0 + $1.totalWords }
+        let wpm = duration > 0 ? Double(totalWords) / (duration / 60.0) : 0
+        let fluency = max(0, min(100, 85 - Double(totalFillers) * 3 - Double(totalPauses) * 2))
+
+        return SessionFeedback(
+            id: UUID().uuidString,
+            sessionId: UUID(uuidString: sessionId) ?? UUID(),
+            fillerWordCount: totalFillers,
+            mispronouncedWords: [],
+            fluencyScore: fluency,
+            onTopicScore: max(50, fluency - 5),
+            pauses: totalPauses,
+            summary: "Session completed (\(turnSummaries.count) turns, \(Int(wpm)) WPM). Feedback computed locally.",
+            createdAt: Date()
+        )
+    }
+
+    /// Build a SpeechAnalysisResponse from locally-collected turn summaries for the feedback screen.
+    private func buildLocalFallbackResponse(
+        turnSummaries: [SessionTurnSummary],
+        fullTranscript: String,
+        duration: TimeInterval
+    ) -> SpeechAnalysisResponse {
+        let totalWords = turnSummaries.reduce(0) { $0 + $1.totalWords }
+        let totalFillers = turnSummaries.reduce(0) { $0 + $1.fillers }
+        let totalPauses = turnSummaries.reduce(0) { $0 + $1.pauses }
+        let totalVeryLongPauses = turnSummaries.reduce(0) { $0 + $1.veryLongPauses }
+        let totalRepetitions = turnSummaries.reduce(0) { $0 + $1.repetitions }
+        let durationS = duration > 0 ? duration : 30.0
+        let wpm = durationS > 0 ? Double(totalWords) / (durationS / 60.0) : 0
+        let fillerRate = durationS > 0 ? Double(totalFillers) / durationS * 60.0 : 0
+        let avgPause: Double = {
+            let pauseTurns = turnSummaries.filter { $0.pauses > 0 }
+            guard !pauseTurns.isEmpty else { return 0 }
+            return pauseTurns.reduce(0.0) { $0 + $1.avgPauseS } / Double(pauseTurns.count)
+        }()
+
+        let metrics = SpeechMetrics(
+            wpm: wpm,
+            totalWords: totalWords,
+            durationS: durationS,
+            fillerRatePerMin: fillerRate,
+            fillers: totalFillers,
+            pauses: totalPauses,
+            avgPauseS: avgPause,
+            veryLongPauses: totalVeryLongPauses,
+            repetitions: totalRepetitions,
+            fillerExamples: [],
+            pauseExamples: []
+        )
+
+        let fluency = max(0, min(100, 85 - Double(totalFillers) * 3 - Double(totalRepetitions) * 5))
+        let confidence = max(0, min(100, wpm >= 100 && wpm <= 170 ? 80 : 60))
+        let clarity = max(0, min(100, 80 - Double(totalVeryLongPauses) * 5 - Double(totalRepetitions) * 4))
+
+        let coaching = SpeechCoaching(
+            scores: CoachingScores(fluency: fluency, confidence: Double(confidence), clarity: clarity),
+            primaryIssue: totalFillers > 5 ? "Reduce filler words to improve fluency." : "Keep practising for smoother speech.",
+            primaryIssueTitle: totalFillers > 5 ? "Filler Words" : "General Practice",
+            secondaryIssues: [],
+            strengths: totalWords > 50 ? ["Good amount of speaking"] : [],
+            suggestions: ["Try to reduce filler words", "Practice speaking at a steady pace"],
+            evidence: [],
+            llmCoaching: nil
+        )
+
+        let progress = SpeechProgress(
+            deltas: Deltas(wpm: 0, fillers: 0, pauses: 0),
+            overallDirection: "mixed",
+            weeklySummary: "Session completed (offline feedback)."
+        )
+
+        return SpeechAnalysisResponse(
+            transcript: fullTranscript,
+            metrics: metrics,
+            coaching: coaching,
+            progress: progress
+        )
     }
 }
 
@@ -475,6 +916,9 @@ final class AICallController: UIViewController {
 
 extension AICallController: AVAudioPlayerDelegate {
     func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+        // Transition from speaking → listening.
+        // Reset state first so restartListening's guards pass.
+        currentState = .idle
         isProcessing = false
         restartListening()
     }
@@ -493,6 +937,13 @@ extension AICallController: UITableViewDataSource, UITableViewDelegate {
         let bubble = chatBubbles[indexPath.row]
         cell.configure(text: bubble.text, isUser: bubble.sender == .user)
         return cell
+    }
+
+    func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        let bubble = chatBubbles[indexPath.row]
+        if bubble.sender == .ai, bubble.text.contains("tap here to retry"), lastFailedAudioData != nil {
+            retryLastTurn()
+        }
     }
 }
 

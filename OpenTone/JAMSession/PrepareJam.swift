@@ -25,15 +25,29 @@ final class PrepareJamViewController: UIViewController {
             timerCell.pauseTimer()
         }
 
-        // Local topic generation is synchronous — no spinner needed.
-        guard let session = JamSessionDataModel.shared.regenerateTopicForActiveSession() else {
-            isRegenerating = false
-            return
+        // Show a loading indicator on the button while waiting for the LLM
+        closeButton.configuration?.image = UIImage(systemName: "ellipsis.circle")
+        closeButton.isEnabled = false
+
+        JamSessionDataModel.shared.regenerateTopicForActiveSession { [weak self] updatedSession in
+            guard let self else { return }
+            self.closeButton.configuration?.image = UIImage(systemName: "arrow.triangle.2.circlepath")
+            self.closeButton.isEnabled = true
+            self.isRegenerating = false
+
+            if let updated = updatedSession {
+                self.applyTopicUpdate(updated)
+            }
+
+            // Resume the timer
+            if let timerCell = self.collectionView.cellForItem(at: IndexPath(item: 0, section: 0)) as? TimerCellCollectionViewCell {
+                timerCell.resumeTimer()
+            }
         }
+    }
 
-        closeButton.configuration?.image = UIImage(systemName: "arrow.triangle.2.circlepath")
-        isRegenerating = false
-
+    /// Apply a topic update to the UI (called for both local fallback and LLM result).
+    private func applyTopicUpdate(_ session: JamSession) {
         selectedTopic = session.topic
         allSuggestions = session.suggestions
         remainingSeconds = session.secondsLeft
@@ -42,7 +56,7 @@ final class PrepareJamViewController: UIViewController {
         bulbButton.isHidden = visibleCount >= allSuggestions.count
         collectionView.reloadData()
     }
-    
+
     private var selectedTopic: String = ""
     private var allSuggestions: [String] = []
 

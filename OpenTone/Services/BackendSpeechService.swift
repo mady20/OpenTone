@@ -33,6 +33,12 @@ final class BackendSpeechService {
     private var decoder: JSONDecoder { JSONDecoder() }
     private init() {}
 
+    private struct ChatStartForm: Encodable {
+        let mode: String
+        let scenario: String
+        let difficulty: String
+    }
+
     // MARK: - POST /analyze/audio  (multipart — Whisper path)
 
     /// Upload raw .m4a to the backend so Whisper transcribes it with real word timestamps.
@@ -80,7 +86,7 @@ final class BackendSpeechService {
         // Audio file field
         body.append("\(dash)\(boundary)\(crlf)".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"file\"; filename=\"audio.m4a\"\(crlf)".data(using: .utf8)!)
-        body.append("Content-Type: audio/m4a\(crlf)\(crlf)".data(using: .utf8)!)
+        body.append("Content-Type: audio/mp4\(crlf)\(crlf)".data(using: .utf8)!)
         body.append(audio)
         body.append(crlf.data(using: .utf8)!)
 
@@ -113,7 +119,7 @@ final class BackendSpeechService {
         // Audio file field
         body.append("\(dash)\(boundary)\(crlf)".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"file\"; filename=\"audio.m4a\"\(crlf)".data(using: .utf8)!)
-        body.append("Content-Type: audio/m4a\(crlf)\(crlf)".data(using: .utf8)!)
+        body.append("Content-Type: audio/mp4\(crlf)\(crlf)".data(using: .utf8)!)
         body.append(audioData)
         body.append(crlf.data(using: .utf8)!)
 
@@ -159,6 +165,42 @@ final class BackendSpeechService {
     }
 
     // MARK: - POST /chat  (1-on-1 AI Call conversation turn)
+
+    func startChat(
+        mode: String = "call",
+        scenario: String = "",
+        difficulty: String = "medium"
+    ) async throws -> ChatStartResponse {
+        guard let url = URL(string: "\(baseURL)/chat/start") else {
+            throw BackendError.httpError(0, "Invalid URL")
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded; charset=utf-8", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 45
+        request.httpBody = formEncodedData(from: ChatStartForm(mode: mode, scenario: scenario, difficulty: difficulty))
+
+        return try await fetchDecoded(request)
+    }
+
+    // MARK: - POST /jam/topics  (LLM-generated JAM topic)
+
+    /// Ask the backend to generate a speaking topic + suggestions via Ollama.
+    func generateJamTopic() async throws -> JamTopicResponse {
+        guard let url = URL(string: "\(baseURL)/jam/topics") else {
+            throw BackendError.httpError(0, "Invalid URL")
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 30
+        // No body needed — the backend generates on its own
+        request.httpBody = "{}".data(using: .utf8)
+
+        return try await fetchDecoded(request)
+    }
 
     /// Send one audio chunk from the AI Call screen.
     /// Returns the AI's text reply, WAV audio bytes, and per-turn metrics.
@@ -232,12 +274,86 @@ final class BackendSpeechService {
         // Audio field
         body.append("\(dash)\(boundary)\(crlf)".data(using: .utf8)!)
         body.append("Content-Disposition: form-data; name=\"file\"; filename=\"chunk.m4a\"\(crlf)".data(using: .utf8)!)
-        body.append("Content-Type: audio/m4a\(crlf)\(crlf)".data(using: .utf8)!)
+        body.append("Content-Type: audio/mp4\(crlf)\(crlf)".data(using: .utf8)!)
         body.append(audioData)
         body.append(crlf.data(using: .utf8)!)
 
         body.append("\(dash)\(boundary)\(dash)\(crlf)".data(using: .utf8)!)
         return body
+    }
+
+    // MARK: - POST /chat/end-session  (Session-level feedback)
+
+    /// Call when the AI Call or Roleplay session ends.
+    /// Sends the last audio chunk + cumulative transcript for full-pipeline feedback.
+    func endSession(
+        lastAudioData: Data?,
+        fullTranscript: String,
+        totalDurationS: Double,
+        userId: String,
+        sessionId: String,
+        turnSummaries: [SessionTurnSummary],
+        mode: String = "call"
+    ) async throws -> SpeechAnalysisResponse {
+        guard let url = URL(string: "\(baseURL)/chat/end-session") else {
+            throw BackendError.httpError(0, "Invalid URL")
+        }
+
+        let boundary = "OpenTone-EndSession-\(UUID().uuidString)"
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 120
+
+        var body = Data()
+        let crlf = "\r\n"
+        let dash = "--"
+
+        func appendText(_ name: String, _ value: String) {
+            body.append("\(dash)\(boundary)\(crlf)".data(using: .utf8)!)
+            body.append("Content-Disposition: form-data; name=\"\(name)\"\(crlf)\(crlf)".data(using: .utf8)!)
+            body.append(value.data(using: .utf8)!)
+            body.append(crlf.data(using: .utf8)!)
+        }
+
+        appendText("user_id", userId)
+        appendText("session_id", sessionId)
+        appendText("mode", mode)
+        appendText("full_transcript", fullTranscript)
+        appendText("total_duration_s", String(totalDurationS))
+        appendText("turn_summaries_json", encodeJSONString(turnSummaries))
+
+        // Audio file field — send last chunk or a minimal placeholder
+        let audioData = (lastAudioData != nil && lastAudioData!.count > 100) ? lastAudioData! : _minimalWav()
+        body.append("\(dash)\(boundary)\(crlf)".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"final.m4a\"\(crlf)".data(using: .utf8)!)
+        body.append("Content-Type: audio/mp4\(crlf)\(crlf)".data(using: .utf8)!)
+        body.append(audioData)
+        body.append(crlf.data(using: .utf8)!)
+
+        body.append("\(dash)\(boundary)\(dash)\(crlf)".data(using: .utf8)!)
+        request.httpBody = body
+
+        return try await fetchDecoded(request)
+    }
+
+    /// Minimal valid WAV header (44 bytes of silence) used as placeholder when no audio chunk is available.
+    private func _minimalWav() -> Data {
+        var d = Data()
+        d.append(contentsOf: [0x52, 0x49, 0x46, 0x46]) // "RIFF"
+        d.append(contentsOf: withUnsafeBytes(of: UInt32(36).littleEndian) { Array($0) }) // file size - 8
+        d.append(contentsOf: [0x57, 0x41, 0x56, 0x45]) // "WAVE"
+        d.append(contentsOf: [0x66, 0x6D, 0x74, 0x20]) // "fmt "
+        d.append(contentsOf: withUnsafeBytes(of: UInt32(16).littleEndian) { Array($0) }) // chunk size
+        d.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) })  // PCM
+        d.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Array($0) })  // mono
+        d.append(contentsOf: withUnsafeBytes(of: UInt32(16000).littleEndian) { Array($0) }) // sample rate
+        d.append(contentsOf: withUnsafeBytes(of: UInt32(32000).littleEndian) { Array($0) }) // byte rate
+        d.append(contentsOf: withUnsafeBytes(of: UInt16(2).littleEndian) { Array($0) })  // block align
+        d.append(contentsOf: withUnsafeBytes(of: UInt16(16).littleEndian) { Array($0) }) // bits per sample
+        d.append(contentsOf: [0x64, 0x61, 0x74, 0x61]) // "data"
+        d.append(contentsOf: withUnsafeBytes(of: UInt32(0).littleEndian) { Array($0) })  // data size
+        return d
     }
 
     // MARK: - GET /user/profile
@@ -293,6 +409,32 @@ final class BackendSpeechService {
             throw BackendError.httpError(http.statusCode, body)
         }
     }
+
+    private func formEncodedData<T: Encodable>(from value: T) -> Data? {
+        guard let data = try? JSONEncoder().encode(value),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
+
+        let allowed = CharacterSet.urlQueryAllowed.subtracting(CharacterSet(charactersIn: "+&="))
+        let formString = object.map { key, value in
+            let escapedKey = key.addingPercentEncoding(withAllowedCharacters: allowed) ?? key
+            let escapedValue = String(describing: value).addingPercentEncoding(withAllowedCharacters: allowed) ?? String(describing: value)
+            return "\(escapedKey)=\(escapedValue)"
+        }
+        .sorted()
+        .joined(separator: "&")
+
+        return formString.data(using: .utf8)
+    }
+
+    private func encodeJSONString<T: Encodable>(_ value: T) -> String {
+        guard let data = try? JSONEncoder().encode(value),
+              let json = String(data: data, encoding: .utf8) else {
+            return "[]"
+        }
+        return json
+    }
 }
 
 // MARK: - Feedback bridge
@@ -325,6 +467,21 @@ extension BackendSpeechService {
             aiFeedbackSummary: r.progress.weeklySummary,
             coaching:          r.coaching,
             progress:          r.progress
+        )
+    }
+
+    /// Convert a backend response into a SessionFeedback record suitable for persisting in an Activity.
+    static func toSessionFeedback(_ r: SpeechAnalysisResponse, sessionId: UUID) -> SessionFeedback {
+        return SessionFeedback(
+            id: UUID().uuidString,
+            sessionId: sessionId,
+            fillerWordCount: r.metrics.fillers,
+            mispronouncedWords: [],
+            fluencyScore: r.coaching.scores.fluency,
+            onTopicScore: r.coaching.scores.clarity,
+            pauses: r.metrics.pauses,
+            summary: r.progress.weeklySummary,
+            createdAt: Date()
         )
     }
 

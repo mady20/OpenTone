@@ -35,6 +35,8 @@ final class SessionManager {
     func logout() {
         currentUser = nil
         UserDataModel.shared.deleteCurrentUser()
+        // Clear cached speech coaching data so the next user starts fresh
+        UserDefaults.standard.removeObject(forKey: "opentone.lastWpmDelta")
         reloadAllDataModels()
     }
 
@@ -45,6 +47,7 @@ final class SessionManager {
         HistoryDataModel.shared.reloadForCurrentUser()
         JamSessionDataModel.shared.reloadForCurrentUser()
         RoleplaySessionDataModel.shared.reloadForCurrentUser()
+        CallRecordDataModel.shared.reloadForCurrentUser()
         activities = []
     }
 

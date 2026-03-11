@@ -151,10 +151,12 @@ final class ProfileStoryboardCollectionViewController: UICollectionViewControlle
 
             let isCurrentUser = displayUser?.id == SessionManager.shared.currentUser?.id
             
-            let roleplaysCount = isCurrentUser ? HistoryDataModel.shared.searchHistory(by: .roleplay).count : (displayUser?.roleplayIDs.count ?? 0)
-            let jamsCount = isCurrentUser ? HistoryDataModel.shared.searchHistory(by: .jam).count : (displayUser?.jamSessionIDs.count ?? 0)
+            // Always derive counts from HistoryDataModel (roleplayIDs/jamSessionIDs on User are not persisted)
+            let callsCount = isCurrentUser ? HistoryDataModel.shared.searchHistory(by: .aiCall).count : 0
+            let roleplaysCount = isCurrentUser ? HistoryDataModel.shared.searchHistory(by: .roleplay).count : 0
+            let jamsCount = isCurrentUser ? HistoryDataModel.shared.searchHistory(by: .jam).count : 0
 
-            cell.configure(roleplays: roleplaysCount, jams: jamsCount)
+            cell.configure(calls: callsCount, roleplays: roleplaysCount, jams: jamsCount)
             return cell
 
         case .achievements:

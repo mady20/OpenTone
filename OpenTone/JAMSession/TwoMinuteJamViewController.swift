@@ -148,9 +148,23 @@ final class TwoMinuteJamViewController: UIViewController, UITabBarControllerDele
     }
 
     private func startNewSession() {
-        // Local topic generation is instant — no spinner needed.
-        JamSessionDataModel.shared.startNewSession()
-        navigateToPrepare(resetTimer: true)
+        // Disable button and show loading while LLM generates the topic
+        unleashButton.isEnabled = false
+        unleashButton.setTitle("  Generating Topic…", for: .normal)
+        unleashButton.configuration?.showsActivityIndicator = true
+
+        JamSessionDataModel.shared.startNewSession { [weak self] session in
+            guard let self else { return }
+            self.unleashButton.isEnabled = true
+            self.unleashButton.setTitle("  Unleash a Topic", for: .normal)
+            self.unleashButton.configuration?.showsActivityIndicator = false
+
+            guard session != nil else {
+                // Generation failed – stay on current screen
+                return
+            }
+            self.navigateToPrepare(resetTimer: true)
+        }
     }
 
     private func navigateToPrepare(resetTimer: Bool) {

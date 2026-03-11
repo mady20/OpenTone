@@ -107,8 +107,8 @@ extension UserRow {
                 lastActiveDate: streakLastActive
             ),
             lastSeen: lastSeen,
-            roleplayIDs: [],     // fetched separately
-            jamSessionIDs: [],   // fetched separately
+            roleplayIDs: [],     // not stored in users table; counts derived from activities
+            jamSessionIDs: [],   // not stored in users table; counts derived from activities
             friends: friendIds ?? [],
             goal: goal
         )
@@ -134,6 +134,7 @@ struct ActivityRow: Codable {
     let scenarioId: UUID?
     let roleplaySession: RoleplaySession?
     let feedback: SessionFeedback?
+    let createdAt: Date?
 
     enum CodingKeys: String, CodingKey {
         case id, type, title, date, topic, duration, feedback
@@ -143,6 +144,7 @@ struct ActivityRow: Codable {
         case isCompleted    = "is_completed"
         case scenarioId     = "scenario_id"
         case roleplaySession = "roleplay_session"
+        case createdAt      = "created_at"
     }
 
     init(from activity: Activity, userId: UUID) {
@@ -159,6 +161,7 @@ struct ActivityRow: Codable {
         self.scenarioId = activity.scenarioId
         self.roleplaySession = activity.roleplaySession
         self.feedback = activity.feedback
+        self.createdAt = nil // server-generated
     }
 
     func toActivity() -> Activity {
@@ -195,6 +198,7 @@ struct JamSessionRow: Codable {
     var startedSpeakingAt: Date?
     var endedAt: Date?
     var isSaved: Bool
+    var createdAt: Date?
 
     enum CodingKeys: String, CodingKey {
         case id, topic, suggestions, phase
@@ -204,6 +208,7 @@ struct JamSessionRow: Codable {
         case startedSpeakingAt = "started_speaking_at"
         case endedAt         = "ended_at"
         case isSaved         = "is_saved"
+        case createdAt       = "created_at"
     }
 
     init(from session: JamSession, isSaved: Bool = false) {
@@ -217,6 +222,7 @@ struct JamSessionRow: Codable {
         self.startedSpeakingAt = session.startedSpeakingAt
         self.endedAt = session.endedAt
         self.isSaved = isSaved
+        self.createdAt = nil // server-generated
     }
 
     func toJamSession() -> JamSession {
@@ -335,6 +341,62 @@ struct RoleplaySessionRow: Codable {
         session.endedAt = endedAt
         session.feedback = feedback
         return session
+    }
+}
+
+// MARK: - CallRecord Row
+
+struct CallRecordRow: Codable {
+    let id: UUID
+    let userId: UUID
+    let participantId: UUID
+    var participantName: String?
+    var participantAvatarUrl: String?
+    var participantBio: String?
+    var participantInterests: [String]?
+    let callDate: Date
+    var duration: Double
+    var userStatus: String
+
+    enum CodingKeys: String, CodingKey {
+        case id, duration
+        case userId              = "user_id"
+        case participantId       = "participant_id"
+        case participantName     = "participant_name"
+        case participantAvatarUrl = "participant_avatar_url"
+        case participantBio      = "participant_bio"
+        case participantInterests = "participant_interests"
+        case callDate            = "call_date"
+        case userStatus          = "user_status"
+    }
+
+    init(from record: CallRecord) {
+        self.id = record.id
+        self.userId = record.userId
+        self.participantId = record.participantId
+        self.participantName = record.participantName
+        self.participantAvatarUrl = record.participantAvatarUrl
+        self.participantBio = record.participantBio
+        self.participantInterests = record.participantInterests
+        self.callDate = record.callDate
+        self.duration = record.duration
+        self.userStatus = record.userStatus.rawValue
+    }
+
+    func toCallRecord() -> CallRecord {
+        var record = CallRecord(
+            userId: userId,
+            participantId: participantId,
+            participantName: participantName,
+            participantAvatarUrl: participantAvatarUrl,
+            participantBio: participantBio,
+            participantInterests: participantInterests,
+            callDate: callDate,
+            duration: duration,
+            userStatus: UserStatus(rawValue: userStatus) ?? .offline
+        )
+        record.setID(id)
+        return record
     }
 }
 

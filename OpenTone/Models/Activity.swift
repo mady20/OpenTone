@@ -25,7 +25,7 @@ struct Activity: Equatable, Codable {
         self.duration = duration
         self.xpEarned = xpEarned
         self.isCompleted = isCompleted
-        self.title = type.rawValue
+        self.title = title
         self.roleplaySession = roleplaySession
         self.feedback = feedback
         self.scenarioId = scenarioId

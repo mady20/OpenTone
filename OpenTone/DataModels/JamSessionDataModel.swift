@@ -29,33 +29,51 @@ class JamSessionDataModel {
 
     // MARK: - Start Session
 
-    @discardableResult
-    func startNewSession() -> JamSession? {
-        guard let user = UserDataModel.shared.getCurrentUser() else { return nil }
+    /// Start a new session by fetching a topic from the backend (Ollama/tinyllama).
+    /// Waits for the backend response before calling `completion`.
+    /// Falls back to a local random topic if the backend is unreachable.
+    func startNewSession(completion: @escaping (JamSession?) -> Void) {
+        guard let user = UserDataModel.shared.getCurrentUser() else {
+            completion(nil)
+            return
+        }
 
-        let topic = generateRandomTopic()
-        let suggestions = generateSuggestions(for: topic)
+        Task {
+            var topic: String
+            var suggestions: [String]
 
-        let session = JamSession(
-            userId: user.id,
-            topic: topic,
-            suggestions: suggestions,
-            phase: .preparing,
-            secondsLeft: 30
-        )
+            do {
+                let response = try await BackendSpeechService.shared.generateJamTopic()
+                topic = response.topic
+                suggestions = response.suggestions
+            } catch {
+                print("⚠️ Backend topic generation failed, using local fallback: \(error.localizedDescription)")
+                topic = generateRandomTopic()
+                suggestions = generateSuggestions(for: topic)
+            }
 
-        activeSession = session
-        let captured = session
-        Task { await upsertSessionInSupabase(captured) }
-        return session
+            await MainActor.run {
+                let session = JamSession(
+                    userId: user.id,
+                    topic: topic,
+                    suggestions: suggestions,
+                    phase: .preparing,
+                    secondsLeft: 30
+                )
+                self.activeSession = session
+                let captured = session
+                Task { await self.upsertSessionInSupabase(captured) }
+                completion(session)
+            }
+        }
     }
 
-    @discardableResult
     func startJamSession(
         phase: JamPhase = .preparing,
-        initialSeconds: Int = 30
-    ) -> JamSession? {
-        return startNewSession()
+        initialSeconds: Int = 30,
+        completion: @escaping (JamSession?) -> Void
+    ) {
+        startNewSession(completion: completion)
     }
 
     // MARK: - Active Session
@@ -104,20 +122,44 @@ class JamSessionDataModel {
 
     // MARK: - Regenerate Topic
 
-    @discardableResult
-    func regenerateTopicForActiveSession() -> JamSession? {
-        guard var session = activeSession else { return nil }
+    /// Regenerate the topic for the active session.
+    /// Waits for the backend LLM response, then calls `completion`.
+    /// Falls back to a local random topic on failure.
+    func regenerateTopicForActiveSession(completion: @escaping (JamSession?) -> Void) {
+        guard var session = activeSession else {
+            completion(nil)
+            return
+        }
 
-        let newTopic = generateRandomTopic()
-        session.topic = newTopic
-        session.suggestions = generateSuggestions(for: newTopic)
-        session.secondsLeft = 30
-        session.startedPrepAt = Date()
+        Task {
+            var topic: String
+            var suggestions: [String]
 
-        activeSession = session
-        let captured = session
-        Task { await upsertSessionInSupabase(captured) }
-        return session
+            do {
+                let response = try await BackendSpeechService.shared.generateJamTopic()
+                topic = response.topic
+                suggestions = response.suggestions
+            } catch {
+                print("⚠️ Backend topic regeneration failed, using local fallback: \(error.localizedDescription)")
+                topic = self.generateRandomTopic()
+                suggestions = self.generateSuggestions(for: topic)
+            }
+
+            await MainActor.run {
+                guard var current = self.activeSession, current.id == session.id else {
+                    completion(nil)
+                    return
+                }
+                current.topic = topic
+                current.suggestions = suggestions
+                current.secondsLeft = 30
+                current.startedPrepAt = Date()
+                self.activeSession = current
+                let captured = current
+                Task { await self.upsertSessionInSupabase(captured) }
+                completion(current)
+            }
+        }
     }
 
     // regenerateTopicWithAI and startNewSessionWithAI removed.

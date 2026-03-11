@@ -11,6 +11,8 @@ struct ProgressCellData {
     var speechProfile: UserSpeechProfile? = nil
     /// Optional WPM delta from last session
     var lastWpmDelta: Double? = nil
+    /// True only when the user has completed at least one session (jam, roleplay, or call)
+    var hasCompletedSessions: Bool = false
 }
 
 // MARK: - Redesigned Progress Cell (fully programmatic)
@@ -385,8 +387,10 @@ final class ProgressCell: UICollectionViewCell {
             lbl.textColor = i == todayIdx ? AppColors.primary : .secondaryLabel
         }
 
-        // ── Coaching score + delta (only if speech profile available) ──
-        if let profile = data.speechProfile, profile.sessionsCount > 0 {
+        // ── Coaching score + delta (only after the user has completed real sessions) ──
+        if data.hasCompletedSessions,
+           let profile = data.speechProfile,
+           profile.sessionsCount > 0 {
             let overall = Int((profile.fluencyScore + profile.confidenceScore + profile.clarityScore) / 3.0)
             coachingScoreLabel.text = "Speech score: \(overall)%"
             coachingScoreLabel.isHidden = false
@@ -394,12 +398,25 @@ final class ProgressCell: UICollectionViewCell {
             coachingScoreLabel.isHidden = true
         }
 
-        if let delta = data.lastWpmDelta, abs(delta) >= 1 {
+        if data.hasCompletedSessions,
+           let delta = data.lastWpmDelta, abs(delta) >= 1 {
             let arrow = delta > 0 ? "↑" : "↓"
             lastDeltaLabel.text = "\(arrow) \(abs(Int(delta))) WPM since last session"
             lastDeltaLabel.isHidden = false
         } else {
             lastDeltaLabel.isHidden = true
+        }
+
+        // For brand-new users, show a welcome hint below the greeting
+        if !data.hasCompletedSessions {
+            coachingScoreLabel.text = "Start a session to track progress"
+            coachingScoreLabel.textColor = .secondaryLabel
+            coachingScoreLabel.font = .systemFont(ofSize: 12, weight: .regular)
+            coachingScoreLabel.isHidden = false
+            lastDeltaLabel.isHidden = true
+        } else {
+            coachingScoreLabel.textColor = AppColors.primary
+            coachingScoreLabel.font = .systemFont(ofSize: 12, weight: .semibold)
         }
     }
 
