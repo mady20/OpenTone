@@ -50,6 +50,14 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		0CBABBD32F626BCC00BC03C1 /* Recovered References */ = {
+			isa = PBXGroup;
+			children = (
+				AA000001SECRETS000000001 /* Secrets.xcconfig */,
+			);
+			name = "Recovered References";
+			sourceTree = "<group>";
+		};
 		0CBCAB402F4370B500CC26D6 /* Frameworks */ = {
 			isa = PBXGroup;
 			children = (
@@ -63,6 +71,7 @@
 				3FAE41F32EC43B5E00FADCC1 /* OpenTone */,
 				3FBEA97B2ED55D6300788555 /* OpenTone.app */,
 				0CBCAB402F4370B500CC26D6 /* Frameworks */,
+				0CBABBD32F626BCC00BC03C1 /* Recovered References */,
 			);
 			sourceTree = "<group>";
 		};

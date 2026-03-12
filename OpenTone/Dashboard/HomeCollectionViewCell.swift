@@ -1,50 +1,111 @@
 import UIKit
 
 class HomeCollectionViewCell: UICollectionViewCell {
-    
-    @IBOutlet weak var imageView: UIImageView!
-    @IBOutlet weak var textLabel: UILabel!
 
+    // MARK: - Subviews
 
-    override func awakeFromNib() {
-        super.awakeFromNib()
+    private let iconImageView: UIImageView = {
+        let iv = UIImageView()
+        iv.contentMode = .scaleAspectFit
+        iv.tintColor = .white
+        iv.translatesAutoresizingMaskIntoConstraints = false
+        return iv
+    }()
 
-        // Cell layer: shadow + border (no clipping)
-        backgroundColor = .clear
+    private let titleLabel: UILabel = {
+        let label = UILabel()
+        label.textColor = .white
+        label.font = UIFont.systemFont(ofSize: 14, weight: .semibold)
+        label.numberOfLines = 2
+        label.textAlignment = .left
+        label.translatesAutoresizingMaskIntoConstraints = false
+        return label
+    }()
+
+    private let gradientLayer = CAGradientLayer()
+
+    // MARK: - Init
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        setupUI()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setupUI()
+    }
+
+    // MARK: - Setup
+
+    private func setupUI() {
         layer.cornerRadius = 20
-        layer.borderWidth = 1
-        layer.borderColor = AppColors.cardBorder.cgColor
-        layer.shadowColor = UIColor.black.cgColor
-        layer.shadowOffset = CGSize(width: 0, height: 4)
-        layer.shadowRadius = 12
-        layer.shadowOpacity = 0.08
-        layer.masksToBounds = false
+        clipsToBounds = true
 
-        // Content view: clips the image
-        contentView.backgroundColor = AppColors.cardBackground
-        contentView.layer.cornerRadius = 20
-        contentView.clipsToBounds = true
+        gradientLayer.startPoint = CGPoint(x: 0, y: 0)
+        gradientLayer.endPoint = CGPoint(x: 1, y: 1)
+        gradientLayer.cornerRadius = 20
+        layer.insertSublayer(gradientLayer, at: 0)
 
-        imageView.contentMode = .scaleAspectFill
-        imageView.clipsToBounds = true
+        contentView.addSubview(iconImageView)
+        contentView.addSubview(titleLabel)
 
-        textLabel.backgroundColor = UIColor.black.withAlphaComponent(0.45)
-        textLabel.textColor = .white
-        textLabel.font = UIFont.systemFont(ofSize: 14, weight: .semibold)
-        textLabel.numberOfLines = 2
+        NSLayoutConstraint.activate([
+            iconImageView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 16),
+            iconImageView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 14),
+            iconImageView.widthAnchor.constraint(equalToConstant: 28),
+            iconImageView.heightAnchor.constraint(equalToConstant: 28),
 
-        registerForTraitChanges([UITraitUserInterfaceStyle.self]) { (self: HomeCollectionViewCell, _) in
-            self.layer.borderColor = AppColors.cardBorder.cgColor
-        }
+            titleLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 14),
+            titleLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -10),
+            titleLabel.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -14),
+        ])
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        gradientLayer.frame = bounds
     }
 
     override func prepareForReuse() {
         super.prepareForReuse()
-        imageView.image = nil
-        textLabel.text = nil
+        iconImageView.image = nil
+        titleLabel.text = nil
     }
+
+    // MARK: - Configure
+
     func configure(with scenario: RoleplayScenario) {
-        textLabel.text = scenario.title
-        imageView.image = UIImage(named: scenario.imageURL)
+        let style = CardStyleProvider.style(for: scenario.title)
+        titleLabel.text = scenario.title
+
+        let config = UIImage.SymbolConfiguration(pointSize: 22, weight: .medium)
+        iconImageView.image = UIImage(systemName: style.iconName, withConfiguration: config)
+
+        gradientLayer.colors = style.gradientColors.map { $0.cgColor }
+    }
+
+    // MARK: - Touch Feedback
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesBegan(touches, with: event)
+        animatePress(pressed: true)
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesEnded(touches, with: event)
+        animatePress(pressed: false)
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesCancelled(touches, with: event)
+        animatePress(pressed: false)
+    }
+
+    private func animatePress(pressed: Bool) {
+        UIView.animate(withDuration: 0.2, delay: 0, options: [.curveEaseInOut, .allowUserInteraction]) {
+            self.transform = pressed ? CGAffineTransform(scaleX: 0.95, y: 0.95) : .identity
+            self.alpha = pressed ? 0.9 : 1.0
+        }
     }
 }

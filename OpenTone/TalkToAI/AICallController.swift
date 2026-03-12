@@ -37,8 +37,8 @@ final class AICallController: UIViewController {
     private var lastVoiceUpdate: Date = .distantPast
     private var hasSpoken = false      // true once voice level crosses threshold
     private var silenceTimer: Timer?
-    private let silenceThreshold: TimeInterval = 2.0
-    private let maxListenDuration: TimeInterval = 30.0  // safety cap
+    private let silenceThreshold: TimeInterval = 3.5
+    private let maxListenDuration: TimeInterval = 45.0  // safety cap
 
     /// Cached audio from the last failed turn — enables tap-to-retry.
     private var lastFailedAudioData: Data?
@@ -302,12 +302,11 @@ final class AICallController: UIViewController {
         hasSpoken = false
         currentState = .listening
 
-        // Use playAndRecord consistently so we never need to switch categories
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetoothA2DP])
         try? session.setActive(true)
         
-        lastVoiceUpdate = Date()  // start the clock
+        lastVoiceUpdate = Date()  
         startSilenceTimer()
         
         AudioManager.shared.startRecording()
@@ -391,7 +390,8 @@ final class AICallController: UIViewController {
         isProcessing = true
         currentState = .processing
 
-        Task {
+        Task { [weak self] in
+            guard let self, !self.isClosing else { return }
             do {
                 let response = try await BackendSpeechService.shared.startChat(
                     mode: "call",
@@ -399,7 +399,8 @@ final class AICallController: UIViewController {
                     difficulty: "medium"
                 )
 
-                await MainActor.run {
+                await MainActor.run { [weak self] in
+                    guard let self, !self.isClosing else { return }
                     let aiText = response.message.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !aiText.isEmpty {
                         self.conversationHistory.append(["role": "assistant", "content": aiText])
@@ -414,20 +415,24 @@ final class AICallController: UIViewController {
                     }
                 }
             } catch {
-                await MainActor.run {
+                await MainActor.run { [weak self] in
+                    guard let self, !self.isClosing else { return }
                     let fallback = "Hi! I'm ready to chat with you. How has your day been so far?"
                     self.conversationHistory.append(["role": "assistant", "content": fallback])
                     self.addBubble(ChatBubble(sender: .ai, text: fallback))
 
                     // Try to speak the fallback via backend TTS
                     Task { [weak self] in
-                        guard let self else { return }
+                        guard let self, !self.isClosing else { return }
                         if let audioData = try? await BackendSpeechService.shared.tts(text: fallback), !audioData.isEmpty {
-                            await MainActor.run { [weak self] in self?.speakAI(audioData: audioData) }
+                            await MainActor.run { [weak self] in 
+                                guard let self, !self.isClosing else { return }
+                                self.speakAI(audioData: audioData) 
+                            }
                         } else {
                             // TTS also failed — just start listening
                             await MainActor.run { [weak self] in
-                                guard let self else { return }
+                                guard let self, !self.isClosing else { return }
                                 self.isProcessing = false
                                 self.startListening()
                             }
@@ -454,7 +459,8 @@ final class AICallController: UIViewController {
 
         currentState = .processing
 
-        Task {
+        Task { [weak self] in
+            guard let self, !self.isClosing else { return }
             do {
                 let userId = UserDataModel.shared.getCurrentUser()?.id.uuidString ?? "demo"
                 let response = try await BackendSpeechService.shared.analyzeChat(
@@ -463,10 +469,11 @@ final class AICallController: UIViewController {
                     mode: "call",
                     scenario: "Open Conversation",
                     difficulty: "medium",
-                    conversationHistory: conversationHistory
+                    conversationHistory: self.conversationHistory
                 )
 
-                await MainActor.run {
+                await MainActor.run { [weak self] in
+                    guard let self, !self.isClosing else { return }
                     let userText = response.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !userText.isEmpty {
                         self.addBubble(ChatBubble(sender: .user, text: userText))
@@ -503,7 +510,8 @@ final class AICallController: UIViewController {
                     }
                 }
             } catch {
-                await MainActor.run {
+                await MainActor.run { [weak self] in
+                    guard let self, !self.isClosing else { return }
                     print("❌ Backend error:", error.localizedDescription)
                     // Cache the audio so the user can retry this turn
                     self.lastFailedAudioData = data
@@ -532,7 +540,8 @@ final class AICallController: UIViewController {
             tableView.deleteRows(at: [IndexPath(row: chatBubbles.count, section: 0)], with: .fade)
         }
 
-        Task {
+        Task { [weak self] in
+            guard let self, !self.isClosing else { return }
             do {
                 let userId = UserDataModel.shared.getCurrentUser()?.id.uuidString ?? "demo"
                 let response = try await BackendSpeechService.shared.analyzeChat(
@@ -541,10 +550,11 @@ final class AICallController: UIViewController {
                     mode: "call",
                     scenario: "Open Conversation",
                     difficulty: "medium",
-                    conversationHistory: conversationHistory
+                    conversationHistory: self.conversationHistory
                 )
 
-                await MainActor.run {
+                await MainActor.run { [weak self] in
+                    guard let self, !self.isClosing else { return }
                     self.isRetrying = false
                     let userText = response.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !userText.isEmpty {
@@ -581,7 +591,8 @@ final class AICallController: UIViewController {
                     }
                 }
             } catch {
-                await MainActor.run {
+                await MainActor.run { [weak self] in
+                    guard let self, !self.isClosing else { return }
                     self.isRetrying = false
                     self.lastFailedAudioData = cachedAudio
                     let msg = "Still having trouble — tap here to retry or keep talking."

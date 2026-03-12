@@ -63,6 +63,7 @@ class RoleplaysViewController: UIViewController {
         collectionView.delegate = self
         collectionView.dataSource = self
         collectionView.backgroundColor = .clear
+        collectionView.register(RoleplaysCell.self, forCellWithReuseIdentifier: "RoleplayCell")
     }
 
     func setupCollectionViewLayout() {
@@ -74,7 +75,7 @@ class RoleplaysViewController: UIViewController {
         let totalSpacing = padding * 2 + spacing
         let itemWidth = (collectionView.frame.width - totalSpacing) / 2
 
-        layout.itemSize = CGSize(width: itemWidth, height: 130)
+        layout.itemSize = CGSize(width: itemWidth, height: 160)
         layout.minimumLineSpacing = 18
         layout.minimumInteritemSpacing = spacing
         layout.sectionInset = UIEdgeInsets(
@@ -135,7 +136,10 @@ extension RoleplaysViewController: UICollectionViewDataSource, UICollectionViewD
         ) as! RoleplaysCell
 
         let scenario = filteredRoleplays[indexPath.row]
-        cell.configure(title: scenario.title, imageName: scenario.imageURL)
+        let style = CardStyleProvider.style(for: scenario.title)
+        cell.configure(title: scenario.title,
+                       iconName: style.iconName,
+                       gradientColors: style.gradientColors)
 
         return cell
     }

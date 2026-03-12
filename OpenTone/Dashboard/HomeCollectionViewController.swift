@@ -72,6 +72,11 @@ class HomeCollectionViewController: UICollectionViewController {
             forCellWithReuseIdentifier: CallSessionCell.reuseID
         )
 
+        collectionView.register(
+            HomeCollectionViewCell.self,
+            forCellWithReuseIdentifier: "Cell"
+        )
+
         collectionView.collectionViewLayout = createLayout()
         collectionView.backgroundColor = AppColors.screenBackground
 
@@ -646,7 +651,7 @@ extension HomeCollectionViewController {
         let item = NSCollectionLayoutItem(
             layoutSize: NSCollectionLayoutSize(
                 widthDimension: .fractionalWidth(0.5),
-                heightDimension: .absolute(130)
+                heightDimension: .absolute(160)
             )
         )
 
@@ -655,7 +660,7 @@ extension HomeCollectionViewController {
         let group = NSCollectionLayoutGroup.horizontal(
             layoutSize: NSCollectionLayoutSize(
                 widthDimension: .fractionalWidth(0.93),
-                heightDimension: .absolute(130)
+                heightDimension: .absolute(160)
             ),
             subitems: [item, item]
         )

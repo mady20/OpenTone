@@ -7,8 +7,9 @@ class RolePlayStartCollectionViewController: UIViewController {
     var currentSession: RoleplaySession?
 
     // MARK: - UI Elements
-    private let heroImageView = UIImageView()
+    private let heroContainerView = UIView()
     private let heroGradient = CAGradientLayer()
+    private let heroIconView = UIImageView()
     private let heroTitleLabel = UILabel()
     private let chipStack = UIStackView()
     private let infoCard = UIView()
@@ -34,7 +35,7 @@ class RolePlayStartCollectionViewController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        heroGradient.frame = heroImageView.bounds
+        heroGradient.frame = heroContainerView.bounds
     }
 
     // MARK: - Build UI
@@ -49,18 +50,20 @@ class RolePlayStartCollectionViewController: UIViewController {
     // MARK: - Hero Image (pinned to top, fixed height)
 
     private func buildHeroImage() {
-        heroImageView.contentMode = .scaleAspectFill
-        heroImageView.clipsToBounds = true
-        heroImageView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(heroImageView)
+        heroContainerView.clipsToBounds = true
+        heroContainerView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(heroContainerView)
 
-        // Gradient overlay
-        heroGradient.colors = [
-            UIColor.clear.cgColor,
-            UIColor.black.withAlphaComponent(0.65).cgColor
-        ]
-        heroGradient.locations = [0.35, 1.0]
-        heroImageView.layer.addSublayer(heroGradient)
+        // Gradient background (uses scenario colors)
+        heroGradient.startPoint = CGPoint(x: 0, y: 0)
+        heroGradient.endPoint = CGPoint(x: 1, y: 1)
+        heroContainerView.layer.addSublayer(heroGradient)
+
+        // Large centered icon
+        heroIconView.contentMode = .scaleAspectFit
+        heroIconView.tintColor = UIColor.white.withAlphaComponent(0.35)
+        heroIconView.translatesAutoresizingMaskIntoConstraints = false
+        heroContainerView.addSubview(heroIconView)
 
         // Title on the hero
         heroTitleLabel.font = .systemFont(ofSize: 26, weight: .bold)
@@ -69,16 +72,20 @@ class RolePlayStartCollectionViewController: UIViewController {
         heroTitleLabel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(heroTitleLabel)
 
-        // Hero starts below the Dynamic Island
         NSLayoutConstraint.activate([
-            heroImageView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
-            heroImageView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            heroImageView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            heroImageView.heightAnchor.constraint(equalTo: view.heightAnchor, multiplier: 0.30),
+            heroContainerView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            heroContainerView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            heroContainerView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            heroContainerView.heightAnchor.constraint(equalTo: view.heightAnchor, multiplier: 0.30),
+
+            heroIconView.centerXAnchor.constraint(equalTo: heroContainerView.centerXAnchor),
+            heroIconView.centerYAnchor.constraint(equalTo: heroContainerView.centerYAnchor, constant: -10),
+            heroIconView.widthAnchor.constraint(equalToConstant: 80),
+            heroIconView.heightAnchor.constraint(equalToConstant: 80),
 
             heroTitleLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: cardInset),
             heroTitleLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -cardInset),
-            heroTitleLabel.bottomAnchor.constraint(equalTo: heroImageView.bottomAnchor, constant: -16),
+            heroTitleLabel.bottomAnchor.constraint(equalTo: heroContainerView.bottomAnchor, constant: -16),
         ])
     }
 
@@ -93,7 +100,7 @@ class RolePlayStartCollectionViewController: UIViewController {
         view.addSubview(chipStack)
 
         NSLayoutConstraint.activate([
-            chipStack.topAnchor.constraint(equalTo: heroImageView.bottomAnchor, constant: 14),
+            chipStack.topAnchor.constraint(equalTo: heroContainerView.bottomAnchor, constant: 14),
             chipStack.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: cardInset),
             chipStack.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -cardInset),
         ])
@@ -241,7 +248,13 @@ class RolePlayStartCollectionViewController: UIViewController {
     private func populate() {
         guard let scenario = currentScenario else { return }
 
-        heroImageView.image = UIImage(named: scenario.imageURL)
+        // Hero gradient + icon
+        let style = CardStyleProvider.style(for: scenario.title)
+        heroGradient.colors = style.gradientColors.map { $0.cgColor }
+
+        let iconConfig = UIImage.SymbolConfiguration(pointSize: 60, weight: .medium)
+        heroIconView.image = UIImage(systemName: style.iconName, withConfiguration: iconConfig)
+
         heroTitleLabel.text = scenario.title
         title = nil
 
