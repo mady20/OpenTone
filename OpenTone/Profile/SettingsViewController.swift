@@ -9,7 +9,6 @@ final class SettingsViewController: UIViewController {
     private enum Section: Int, CaseIterable {
         case appearance
         case account
-        case ai
         case about
         case actions
         case dangerZone
@@ -73,7 +72,6 @@ final class SettingsViewController: UIViewController {
         let themeName = ThemeManager.shared.currentTheme.title
 
         let user = SessionManager.shared.currentUser
-        let geminiKeyDetail = GeminiAPIKeyManager.shared.maskedKey ?? "Not configured"
 
         sections = [
             // Section 0 — Appearance
@@ -84,10 +82,6 @@ final class SettingsViewController: UIViewController {
             [
                 Row(title: "Email", icon: "envelope.fill", iconTint: .systemBlue, detail: user?.email ?? "—"),
                 Row(title: "Password", icon: "lock.fill", iconTint: .systemOrange, detail: "••••••••")
-            ],
-            // Section 2 — AI
-            [
-                Row(title: "Gemini API Key", icon: "key.fill", iconTint: .systemTeal, detail: geminiKeyDetail)
             ],
             // Section 2 — About
             [
@@ -382,55 +376,6 @@ final class SettingsViewController: UIViewController {
         present(alert, animated: true)
     }
 
-    private func showGeminiKeyEditor() {
-        let currentMasked = GeminiAPIKeyManager.shared.maskedKey ?? "No key saved"
-        let message = "Current key: \(currentMasked)\n\nPaste your Gemini API key (starts with AIza...)."
-
-        let alert = UIAlertController(title: "Gemini API Key", message: message, preferredStyle: .alert)
-        alert.addTextField { textField in
-            textField.placeholder = "AIza..."
-            textField.isSecureTextEntry = true
-            textField.clearButtonMode = .whileEditing
-            textField.autocapitalizationType = .none
-            textField.autocorrectionType = .no
-            textField.smartInsertDeleteType = .no
-            textField.keyboardType = .asciiCapable
-        }
-
-        alert.addAction(UIAlertAction(title: "Save", style: .default) { [weak self] _ in
-            guard let self,
-                  let entered = alert.textFields?.first?.text?.trimmingCharacters(in: .whitespacesAndNewlines),
-                  !entered.isEmpty else {
-                self?.showAlert(title: "Missing Key", message: "Please enter a Gemini API key.")
-                return
-            }
-
-            guard entered.hasPrefix("AIza") else {
-                self.showAlert(title: "Invalid Key", message: "Gemini key should start with AIza.")
-                return
-            }
-
-            let saved = GeminiAPIKeyManager.shared.setAPIKey(entered)
-            if saved {
-                self.showAlert(title: "Saved", message: "Gemini API key updated.")
-                self.buildSections()
-                self.tableView.reloadData()
-            } else {
-                self.showAlert(title: "Error", message: "Unable to save key to Keychain.")
-            }
-        })
-
-        alert.addAction(UIAlertAction(title: "Remove", style: .destructive) { [weak self] _ in
-            guard let self else { return }
-            _ = GeminiAPIKeyManager.shared.deleteAPIKey()
-            self.showAlert(title: "Removed", message: "Gemini API key removed.")
-            self.buildSections()
-            self.tableView.reloadData()
-        })
-
-        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
-        present(alert, animated: true)
-    }
 }
 
 
@@ -451,7 +396,6 @@ extension SettingsViewController: UITableViewDataSource {
         switch s {
         case .appearance: return "Appearance"
         case .account:    return "Account"
-        case .ai:         return "AI"
         case .about:      return "About"
         case .actions:    return nil
         case .dangerZone: return "Danger Zone"
@@ -481,7 +425,7 @@ extension SettingsViewController: UITableViewDataSource {
 
         // Show disclosure for actionable rows
         let section = Section(rawValue: indexPath.section)
-        if section == .appearance || section == .actions || section == .dangerZone || section == .account || section == .ai || (section == .about && indexPath.row > 0) {
+        if section == .appearance || section == .actions || section == .dangerZone || section == .account || (section == .about && indexPath.row > 0) {
             cell.accessoryType = .disclosureIndicator
         } else {
             cell.accessoryType = .none
@@ -506,9 +450,6 @@ extension SettingsViewController: UITableViewDelegate {
 
         case .account:
             showEditField(for: indexPath.row)
-
-        case .ai:
-            showGeminiKeyEditor()
 
         case .about:
             if indexPath.row == 1 || indexPath.row == 2 {

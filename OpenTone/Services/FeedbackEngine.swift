@@ -27,12 +27,8 @@ protocol RemoteFeedbackProvider {
 }
 
 struct FeedbackEnginePolicy {
-    let enableGeminiEnhancement: Bool
-
     static func fromConfig() -> FeedbackEnginePolicy {
-        let plistFlag = Bundle.main.object(forInfoDictionaryKey: "EnableGeminiFeedbackEnhancement") as? Bool
-        let userDefaultFlag = UserDefaults.standard.object(forKey: "opentone.feedback.gemini.enabled") as? Bool
-        return FeedbackEnginePolicy(enableGeminiEnhancement: userDefaultFlag ?? plistFlag ?? false)
+        FeedbackEnginePolicy()
     }
 }
 
@@ -64,14 +60,7 @@ final class FeedbackEngineCoordinator: FeedbackEngine {
 enum FeedbackEngineFactory {
 
     static func makeDefault() -> FeedbackEngine {
-        let policy = FeedbackEnginePolicy.fromConfig()
-        let onDevice = OnDeviceFeedbackEngine()
-
-        var providers: [RemoteFeedbackProvider] = []
-        if policy.enableGeminiEnhancement {
-            providers.append(GeminiFeedbackProvider())
-        }
-
-        return FeedbackEngineCoordinator(coreEngine: onDevice, remoteProviders: providers)
+        let _ = FeedbackEnginePolicy.fromConfig()
+        return FeedbackEngineCoordinator(coreEngine: OnDeviceFeedbackEngine(), remoteProviders: [])
     }
 }

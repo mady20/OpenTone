@@ -1,7 +1,6 @@
 import Foundation
 
 enum AICallProviderID: String {
-    case gemini
     case backend
 }
 
@@ -48,11 +47,11 @@ struct AICallProviderPolicy {
     static func fromConfig() -> AICallProviderPolicy {
         let primaryRaw = (UserDefaults.standard.string(forKey: "opentone.aiCall.primaryProvider")
             ?? (Bundle.main.object(forInfoDictionaryKey: "AICallPrimaryProvider") as? String)
-            ?? "gemini").lowercased()
+            ?? "backend").lowercased()
 
         let fallbackRaw = (UserDefaults.standard.string(forKey: "opentone.aiCall.fallbackProviders")
             ?? (Bundle.main.object(forInfoDictionaryKey: "AICallFallbackProviders") as? String)
-            ?? "backend").lowercased()
+            ?? "").lowercased()
 
         let requirePrimary = (UserDefaults.standard.object(forKey: "opentone.aiCall.requirePrimaryProvider") as? Bool)
             ?? (Bundle.main.object(forInfoDictionaryKey: "AICallRequirePrimaryProvider") as? Bool)
@@ -62,7 +61,7 @@ struct AICallProviderPolicy {
             ?? (Bundle.main.object(forInfoDictionaryKey: "AICallAllowFallbackOnPrimaryFailure") as? Bool)
             ?? false
 
-        let primary = AICallProviderID(rawValue: primaryRaw) ?? .gemini
+        let primary = AICallProviderID(rawValue: primaryRaw) ?? .backend
         let fallbacks = fallbackRaw
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -96,7 +95,6 @@ enum AICallProviderFactory {
 
     static func makeOrchestrator(policy: AICallProviderPolicy = .fromConfig()) -> AICallOrchestrator {
         let providers: [AICallProviderID: AICallLLMProvider] = [
-            .gemini: GeminiAICallProvider(),
             .backend: BackendAICallProvider()
         ]
 

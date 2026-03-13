@@ -448,7 +448,7 @@ final class AICallController: UIViewController {
             } catch {
                 await MainActor.run { [weak self] in
                     guard let self, !self.isClosing else { return }
-                    let fallback = "Gemini is unavailable right now. Please add or verify your Gemini API key in Settings, then try again."
+                    let fallback = "AI service is unavailable right now. Please try again in a moment."
                     self.conversationHistory.append(["role": "assistant", "content": fallback])
                     self.addBubble(ChatBubble(sender: .ai, text: fallback))
 

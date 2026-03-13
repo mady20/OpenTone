@@ -175,6 +175,29 @@ struct ChatStartResponse: Codable {
     }
 }
 
+struct BackendChatMessage: Codable {
+    let role: String
+    let content: String
+}
+
+struct BackendChatRequest: Encodable {
+    let provider: String
+    let messages: [BackendChatMessage]
+    let temperature: Double
+}
+
+struct BackendChatResponse: Codable {
+    let provider: String
+    let model: String
+    let text: String
+    let fallbackUsed: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case provider, model, text
+        case fallbackUsed = "fallback_used"
+    }
+}
+
 // MARK: - JAM Topic Response
 
 struct JamTopicResponse: Codable {

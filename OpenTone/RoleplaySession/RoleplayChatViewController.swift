@@ -148,16 +148,16 @@ class RoleplayChatViewController: UIViewController {
     private let smoothingFactor: CGFloat = 0.15
 
     // MARK: - Scripted roleplay (primary mode)
-    // Ollama-powered roleplay remains available as a fallback path.
+    // Backend chat roleplay remains available as a fallback path.
 
     private struct LLMMessage {
-        enum Role: String { case user, model }
+        enum Role: String { case user, assistant }
         let role: Role
         let text: String
     }
 
     private var llmHistory: [LLMMessage] = []
-    private var geminiTurnCount = 0  // reused for LLM turn tracking
+    private var roleplayTurnCount = 0  // reused for LLM turn tracking
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -482,7 +482,7 @@ class RoleplayChatViewController: UIViewController {
         displayLink?.invalidate()
     }
 
-    // MARK: - Gemini-powered Roleplay
+    // MARK: - Backend Chat Roleplay
 
     private func buildRoleplaySystemPrompt() -> String {
         return """
@@ -509,9 +509,9 @@ class RoleplayChatViewController: UIViewController {
         """
     }
 
-    private func startGeminiRoleplay() {
+    private func startLLMRoleplay() {
         llmHistory.removeAll()
-        geminiTurnCount = 0
+        roleplayTurnCount = 0
         isProcessingResponse = true
 
         // Show a loading indicator
@@ -521,13 +521,13 @@ class RoleplayChatViewController: UIViewController {
         Task {
             do {
                 let systemPrompt = buildRoleplaySystemPrompt()
-                let reply = try await sendToGeminiForRoleplay(systemPrompt)
+                let reply = try await sendToBackendChatForRoleplay(systemPrompt)
                 await MainActor.run {
                     // Remove loading message
                     if messages.last?.text == "Starting roleplay…" {
                         messages.removeLast()
                     }
-                    handleGeminiResponse(reply)
+                    handleLLMResponse(reply)
                     isProcessingResponse = false
                 }
             } catch {
@@ -543,49 +543,32 @@ class RoleplayChatViewController: UIViewController {
         }
     }
 
-    private func sendToGeminiForRoleplay(_ text: String) async throws -> String {
-        // Build history context
-        let historySnippet = llmHistory.suffix(8).map {
-            "\($0.role == .user ? "USER" : "ASSISTANT"): \($0.text)"
-        }.joined(separator: "\n")
-
-        llmHistory.append(LLMMessage(role: .user, text: text))
-
-        let baseURL = "http://44.221.98.186:11434"
-        guard let url = URL(string: "\(baseURL)/api/generate") else {
-            throw URLError(.badURL)
-        }
-
+    private func sendToBackendChatForRoleplay(_ text: String) async throws -> String {
         let systemPrompt = buildRoleplaySystemPrompt()
-        let fullPrompt = "\(systemPrompt)\n\nConversation so far:\n\(historySnippet)\nUSER: \(text)\nASSISTANT:"
 
-        let body: [String: Any] = [
-            "model": "mistral",
-            "prompt": fullPrompt,
-            "stream": false,
-            "options": ["temperature": 0.8, "num_predict": 300]
+        var messages: [BackendChatMessage] = [
+            BackendChatMessage(role: "system", content: systemPrompt)
         ]
 
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 45
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        let historyMessages = llmHistory.suffix(8).map { item in
+            BackendChatMessage(role: item.role.rawValue, content: item.text)
+        }
+        messages.append(contentsOf: historyMessages)
+        messages.append(BackendChatMessage(role: "user", content: text))
 
-        let (data, _) = try await URLSession.shared.data(for: request)
-        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let reply = json["response"] as? String, !reply.isEmpty else {
+        llmHistory.append(LLMMessage(role: .user, text: text))
+        let response = try await BackendSpeechService.shared.chat(messages: messages)
+        let trimmed = response.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
             throw URLError(.badServerResponse)
         }
-
-        let trimmed = reply.trimmingCharacters(in: .whitespacesAndNewlines)
-        llmHistory.append(LLMMessage(role: .model, text: trimmed))
+        llmHistory.append(LLMMessage(role: .assistant, text: trimmed))
         return trimmed
     }
 
-    private func handleGeminiResponse(_ response: String) {
-        geminiTurnCount += 1
-        let (messageText, suggestions) = parseGeminiResponse(response)
+    private func handleLLMResponse(_ response: String) {
+        roleplayTurnCount += 1
+        let (messageText, suggestions) = parseLLMResponse(response)
 
         messages.append(ChatMessage(sender: .app, text: messageText, suggestions: nil))
 
@@ -597,7 +580,7 @@ class RoleplayChatViewController: UIViewController {
         speakText(messageText)
     }
 
-    private func parseGeminiResponse(_ response: String) -> (String, [String]) {
+    private func parseLLMResponse(_ response: String) -> (String, [String]) {
         var messageText = response
         var suggestions: [String] = []
 
@@ -730,7 +713,7 @@ class RoleplayChatViewController: UIViewController {
     
     private func userResponded(_ text: String) {
         
-        // Prevent empty messages from blowing up the UI and crashing Gemini
+        // Prevent empty messages from blowing up the UI and crashing roleplay flow
         let cleanedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !cleanedText.isEmpty else { return }
 
@@ -753,33 +736,33 @@ class RoleplayChatViewController: UIViewController {
         if isScriptedMode {
             handleScriptedResponse(text)
         } else {
-            handleGeminiUserResponse(text)
+            handleLLMUserResponse(text)
         }
     }
 
-    // MARK: - Gemini response flow
+    // MARK: - LLM response flow
 
-    private func handleGeminiUserResponse(_ text: String) {
+    private func handleLLMUserResponse(_ text: String) {
         // Show thinking indicator
         messages.append(ChatMessage(sender: .app, text: "…", suggestions: nil))
         reloadTableSafely()
 
         Task {
             do {
-                let reply = try await sendToGeminiForRoleplay(text)
+                let reply = try await sendToBackendChatForRoleplay(text)
                 await MainActor.run {
                     // Remove thinking indicator
                     if messages.last?.text == "…" {
                         messages.removeLast()
                     }
                     session.currentLineIndex += 1
-                    handleGeminiResponse(reply)
+                    handleLLMResponse(reply)
                     isProcessingResponse = false
                     currentState = .idle
 
                     // Check if we should end after enough turns
-                    if geminiTurnCount >= scenario.script.count {
-                        endGeminiRoleplay()
+                    if roleplayTurnCount >= scenario.script.count {
+                        endLLMRoleplay()
                     }
                 }
             } catch {
@@ -800,7 +783,7 @@ class RoleplayChatViewController: UIViewController {
         }
     }
 
-    private func endGeminiRoleplay() {
+    private func endLLMRoleplay() {
         session.status = .completed
         session.endedAt = Date()
 

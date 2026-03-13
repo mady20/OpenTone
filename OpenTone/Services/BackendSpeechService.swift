@@ -1,7 +1,7 @@
 import Foundation
 
 /// Networking layer for the OpenTone Speech Coach backend.
-/// Replaces GeminiService for all speech analysis.
+/// Handles backend speech analysis and chat integrations.
 final class BackendSpeechService {
 
     static let shared = BackendSpeechService()
@@ -11,6 +11,13 @@ final class BackendSpeechService {
             return url
         }
         return "http://44.221.98.186:8000"
+    }()
+
+    private let chatBaseURL: String = {
+        if let url = Bundle.main.object(forInfoDictionaryKey: "BackendChatBaseURL") as? String, !url.isEmpty {
+            return url
+        }
+        return "http://3.224.87.47:8000"
     }()
 
     enum BackendError: LocalizedError {
@@ -149,6 +156,26 @@ final class BackendSpeechService {
     }
 
     // MARK: - POST /chat  (1-on-1 AI Call conversation turn)
+
+    func chat(messages: [BackendChatMessage], temperature: Double = 0.2) async throws -> BackendChatResponse {
+        guard let url = URL(string: "\(chatBaseURL)/v1/chat") else {
+            throw BackendError.httpError(0, "Invalid URL")
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 45
+        request.httpBody = try JSONEncoder().encode(
+            BackendChatRequest(
+                provider: "auto",
+                messages: messages,
+                temperature: temperature
+            )
+        )
+
+        return try await fetchDecoded(request)
+    }
 
     func startChat(
         mode: String = "call",
