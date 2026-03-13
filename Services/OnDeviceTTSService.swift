@@ -1,148 +1,211 @@
 import Foundation
 import AVFoundation
-import KokoroSwift
+import os.log
 
-class OnDeviceTTSService {
+final class OnDeviceTTSService: NSObject, AVSpeechSynthesizerDelegate {
     static let shared = OnDeviceTTSService()
 
-    private var kokoroTTS: KokoroTTS?
-    private var isPlaying = false
-    private var isModelLoaded = false
+    private let logger = Logger(subsystem: "com.sudosquad.OpenTone", category: "TTS")
+    private let synthesisQueue = DispatchQueue(label: "com.sudosquad.opentone.supertonic", qos: .userInitiated)
+
+    private var tts: TTSService?
     private var modelLoadingTask: Task<Void, Error>?
-    private var currentVoice: MLXArray?
-    private var audioEngine: AVAudioEngine?
-    private var audioPlayer: AVAudioPlayerNode?
 
-    private init() {
-        setupAudioEngine()
-    }
-    
-    /// Setup AVAudioEngine for playback
-    private func setupAudioEngine() {
-        audioEngine = AVAudioEngine()
-        audioPlayer = AVAudioPlayerNode()
-        audioEngine?.attach(audioPlayer!)
-        audioEngine?.connect(audioPlayer!, to: audioEngine!.mainMixerNode, format: nil)
+    private var currentAudioPlayer: AVAudioPlayer?
+    private var currentPlaybackContinuation: CheckedContinuation<Void, Never>?
+
+    private var fallbackPlaybackContinuation: CheckedContinuation<Void, Never>?
+    private let fallbackSynthesizer = AVSpeechSynthesizer()
+
+    private override init() {
+        super.init()
+        fallbackSynthesizer.delegate = self
     }
 
-    /// Load the Kokoro models
-    func loadModel() async throws {
-        if isModelLoaded { return }
-        if let existingTask = modelLoadingTask {
-            _ = try await existingTask.value
-            return
-        }
-
-        let task = Task<Void, Error> {
-            do {
-                print("Kokoro TTS: Loading model...")
-                let modelDir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("kokoro_model")
-                
-                if !FileManager.default.fileExists(atPath: modelDir.path) {
-                    print("Kokoro TTS: Model directory not found at \(modelDir.path)")
-                    // FIXME: Download or extract models if needed
-                }
-
-                // Initialize Kokoro TTS with misaki G2P processor
-                self.kokoroTTS = KokoroTTS(modelPath: modelDir, g2p: .misaki)
-                
-                // Load voice embedding (af_heart.bin or similar)
-                let voiceURL = modelDir.appendingPathComponent("af_heart.bin")
-                if FileManager.default.fileExists(atPath: voiceURL.path) {
-                    do {
-                        // In a real implementation, load the voice embedding from file
-                        // For now, use a dummy MLXArray
-                        self.currentVoice = MLXArray(zeros: [1, 256])
-                    } catch {
-                        print("Failed to load voice file: \(error)")
-                        self.currentVoice = MLXArray(zeros: [1, 256])
-                    }
-                } else {
-                    // Use dummy voice if file doesn't exist
-                    self.currentVoice = MLXArray(zeros: [1, 256])
-                }
-                
-                self.isModelLoaded = true
-                print("Kokoro TTS: Model loaded successfully")
-            } catch {
-                print("Kokoro TTS: Failed to load model - \(error)")
-                throw error
-            }
-        }
-        modelLoadingTask = task
-        _ = try await task.value
-    }
-
-    /// Synthesize and play text using Kokoro TTS
-    func speak(text: String, voiceName: String = "af_heart") async throws {
+    func preload() async throws {
         try await loadModel()
-        
-        guard let kokoro = kokoroTTS else {
-            throw NSError(domain: "OnDeviceTTSService", code: -1, userInfo: [NSLocalizedDescriptionKey: "TTS Engine not initialized"])
-        }
-        guard let voice = currentVoice else {
-            throw NSError(domain: "OnDeviceTTSService", code: -1, userInfo: [NSLocalizedDescriptionKey: "Voice not loaded"])
-        }
-        
-        isPlaying = true
-        defer { isPlaying = false }
-
-        print("Kokoro TTS: Starting synthesis for text: \(text)")
-        
-        // Generate audio off the main thread
-        let result = try await Task.detached {
-            return try kokoro.generateAudio(voice: voice, language: .enUS, text: text, speed: 1.0)
-        }.value
-
-        let floatArray = result.0
-        print("Kokoro TTS: Synthesis completed, generating \(floatArray.count) samples")
-        
-        try await playAudioData(floatArray, sampleRate: Float(KokoroTTS.Constants.samplingRate))
     }
 
-    /// Convert float PCM array to audio buffer and play
-    private func playAudioData(_ data: [Float], sampleRate: Float) async throws {
-        guard let audioEngine = audioEngine, let audioPlayer = audioPlayer else {
-            throw NSError(domain: "OnDeviceTTSService", code: -2, userInfo: [NSLocalizedDescriptionKey: "Audio engine not initialized"])
+    /// `voiceName` is kept to avoid breaking old call sites.
+    func speak(text: String, voiceName: String = "default") async throws {
+        let cleanedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanedText.isEmpty else {
+            throw OnDeviceTTSError.emptyText
         }
 
-        // Create audio format
-        let format = AVAudioFormat(standardFormatWithSampleRate: Double(sampleRate), channels: 1)
-        guard let format = format else {
-            throw NSError(domain: "OnDeviceTTSService", code: -3, userInfo: [NSLocalizedDescriptionKey: "Could not create audio format"])
+        do {
+            try await loadModel()
+            let voice = mapVoice(voiceName)
+            let audioURL = try await synthesizeToFile(text: cleanedText, voice: voice)
+            try await playAudioFile(audioURL)
+        } catch {
+            logger.error("Supertonic synthesis failed: \(error.localizedDescription, privacy: .public)")
+            try await speakWithSystemFallback(cleanedText)
         }
-
-        // Create audio buffer
-        let frameCount = AVAudioFrameCount(data.count)
-        guard let audioBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else {
-            throw NSError(domain: "OnDeviceTTSService", code: -4, userInfo: [NSLocalizedDescriptionKey: "Could not create audio buffer"])
-        }
-
-        // Copy audio data
-        audioBuffer.frameLength = frameCount
-        let channels = audioBuffer.floatChannelData
-        memcpy(channels![0], data, Int(frameCount) * MemoryLayout<Float>.stride)
-
-        // Start audio engine if not running
-        if !audioEngine.isRunning {
-            do {
-                try audioEngine.start()
-            } catch {
-                print("Error starting audio engine: \(error)")
-            }
-        }
-
-        // Schedule and play buffer
-        audioPlayer.scheduleBuffer(audioBuffer, completionHandler: nil)
-        if !audioPlayer.isPlaying {
-            audioPlayer.play()
-        }
-
-        print("Kokoro TTS: Audio playback started")
     }
 
     func stopPlaying() {
-        isPlaying = false
-        audioPlayer?.stop()
+        Task { @MainActor in
+            currentPlaybackContinuation?.resume()
+            currentPlaybackContinuation = nil
+            currentAudioPlayer?.stop()
+            currentAudioPlayer = nil
+
+            if fallbackSynthesizer.isSpeaking {
+                fallbackSynthesizer.stopSpeaking(at: .immediate)
+            }
+            fallbackPlaybackContinuation?.resume()
+            fallbackPlaybackContinuation = nil
+
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
+    }
+
+    func loadModel() async throws {
+        if tts != nil {
+            return
+        }
+
+        if let task = modelLoadingTask {
+            try await task.value
+            return
+        }
+
+        let task = Task<Void, Error> { [weak self] in
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                self?.synthesisQueue.async { [weak self] in
+                    guard let self else {
+                        continuation.resume(throwing: OnDeviceTTSError.deallocated)
+                        return
+                    }
+
+                    if self.tts != nil {
+                        continuation.resume()
+                        return
+                    }
+
+                    do {
+                        self.tts = try TTSService()
+                        self.logger.info("Supertonic model initialized")
+                        continuation.resume()
+                    } catch {
+                        self.logger.error("Supertonic model init failed: \(error.localizedDescription, privacy: .public)")
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+        }
+
+        modelLoadingTask = task
+
+        do {
+            try await task.value
+        } catch {
+            modelLoadingTask = nil
+            throw error
+        }
+    }
+
+    private func synthesizeToFile(text: String, voice: TTSService.Voice) async throws -> URL {
+        guard let tts else {
+            throw OnDeviceTTSError.engineNotInitialized
+        }
+
+        return try await tts.synthesize(text: text, nfe: 5, voice: voice, language: .en)
+    }
+
+    private func configurePlaybackSession() throws {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers, .defaultToSpeaker])
+        try session.setActive(true)
+    }
+
+    private func playAudioFile(_ fileURL: URL) async throws {
+        try await MainActor.run {
+            try configurePlaybackSession()
+
+            currentPlaybackContinuation?.resume()
+            currentPlaybackContinuation = nil
+            currentAudioPlayer?.stop()
+
+            let player = try AVAudioPlayer(contentsOf: fileURL)
+            player.prepareToPlay()
+            currentAudioPlayer = player
+            player.play()
+        }
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            Task { @MainActor in
+                self.currentPlaybackContinuation = continuation
+                let duration = max(self.currentAudioPlayer?.duration ?? 0.0, 0.05)
+                DispatchQueue.main.asyncAfter(deadline: .now() + duration + 0.05) { [weak self] in
+                    guard let self else { return }
+                    self.currentPlaybackContinuation?.resume()
+                    self.currentPlaybackContinuation = nil
+                    self.currentAudioPlayer = nil
+                }
+            }
+        }
+
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    @MainActor
+    private func speakWithSystemFallback(_ text: String) async throws {
+        let session = AVAudioSession.sharedInstance()
+        try session.setCategory(.playback, mode: .spokenAudio, options: [.duckOthers, .defaultToSpeaker])
+        try session.setActive(true)
+
+        if fallbackSynthesizer.isSpeaking {
+            fallbackSynthesizer.stopSpeaking(at: .immediate)
+        }
+
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            fallbackPlaybackContinuation?.resume()
+            fallbackPlaybackContinuation = continuation
+
+            let utterance = AVSpeechUtterance(string: text)
+            utterance.voice = AVSpeechSynthesisVoice(language: "en-US")
+            utterance.rate = 0.48
+            utterance.volume = 1.0
+            fallbackSynthesizer.speak(utterance)
+        }
+
+        try? session.setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didFinish utterance: AVSpeechUtterance) {
+        fallbackPlaybackContinuation?.resume()
+        fallbackPlaybackContinuation = nil
+    }
+
+    func speechSynthesizer(_ synthesizer: AVSpeechSynthesizer, didCancel utterance: AVSpeechUtterance) {
+        fallbackPlaybackContinuation?.resume()
+        fallbackPlaybackContinuation = nil
+    }
+
+    private func mapVoice(_ voiceName: String) -> TTSService.Voice {
+        let normalized = voiceName.lowercased()
+        if normalized.contains("female") || normalized.hasPrefix("f") {
+            return .female
+        }
+        return .male
+    }
+}
+
+enum OnDeviceTTSError: LocalizedError {
+    case emptyText
+    case engineNotInitialized
+    case deallocated
+
+    var errorDescription: String? {
+        switch self {
+        case .emptyText:
+            return "Cannot synthesize empty text."
+        case .engineNotInitialized:
+            return "Supertonic TTS engine is not initialized."
+        case .deallocated:
+            return "OnDeviceTTSService was deallocated unexpectedly."
+        }
     }
 }

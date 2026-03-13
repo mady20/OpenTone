@@ -49,8 +49,6 @@ class RoleplayChatViewController: UIViewController {
     private var isMuted = false
     private var isSpeaking = false
 
-    private var audioPlayer: AVAudioPlayer?
-
     // MARK: - Scripted roleplay (primary mode)
     // Ollama-powered roleplay remains available as a fallback path.
 
@@ -148,7 +146,7 @@ class RoleplayChatViewController: UIViewController {
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
 
-        audioPlayer?.stop()
+        OnDeviceTTSService.shared.stopPlaying()
 
         if AudioManager.shared.isRecording {
             AudioManager.shared.stopRecording()
@@ -341,28 +339,14 @@ class RoleplayChatViewController: UIViewController {
 
         Task {
             do {
-                let audioData = try await BackendSpeechService.shared.tts(text: text)
-                
+                try await OnDeviceTTSService.shared.speak(text: text, volumeBoost: 1.22)
+
                 await MainActor.run {
-                    guard !self.isMuted else {
-                        self.isSpeaking = false
-                        return
-                    }
-                    
+                    self.isSpeaking = false
+                    // Keep playAndRecord so both mic recording and future TTS work without session conflicts
                     let session = AVAudioSession.sharedInstance()
                     try? session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
                     try? session.setActive(true)
-                    
-                    do {
-                        self.audioPlayer?.stop()  // stop any leftover playback
-                        self.audioPlayer = try AVAudioPlayer(data: audioData)
-                        self.audioPlayer?.delegate = self
-                        self.audioPlayer?.prepareToPlay()
-                        self.audioPlayer?.play()
-                    } catch {
-                        print("Roleplay Audio Player Error: \(error)")
-                        self.isSpeaking = false
-                    }
                 }
             } catch {
                 print("Roleplay TTS Error: \(error)")
@@ -383,7 +367,8 @@ class RoleplayChatViewController: UIViewController {
         )
 
         if isMuted {
-            audioPlayer?.stop()
+            OnDeviceTTSService.shared.stopPlaying()
+            isSpeaking = false
             if AudioManager.shared.isRecording {
                 AudioManager.shared.stopRecording()
             }
@@ -401,8 +386,9 @@ class RoleplayChatViewController: UIViewController {
     @IBAction func micTapped(_ sender: UIButton) {
 
         // Stop TTS if playing so user can speak
-        if let player = audioPlayer, player.isPlaying {
-            player.stop()
+        if isSpeaking {
+            OnDeviceTTSService.shared.stopPlaying()
+            isSpeaking = false
         }
 
         if AudioManager.shared.isRecording {
@@ -619,7 +605,8 @@ class RoleplayChatViewController: UIViewController {
     }
 
     private func showExitAlert() {
-        audioPlayer?.stop()
+        OnDeviceTTSService.shared.stopPlaying()
+        isSpeaking = false
 
         if AudioManager.shared.isRecording {
             AudioManager.shared.stopRecording()
@@ -662,7 +649,8 @@ class RoleplayChatViewController: UIViewController {
 
     
     private func replayRoleplayFromStart() {
-        audioPlayer?.stop()
+        OnDeviceTTSService.shared.stopPlaying()
+        isSpeaking = false
 
         session.currentLineIndex = 0
         session.status = .notStarted
@@ -733,7 +721,8 @@ class RoleplayChatViewController: UIViewController {
     }
 
     private func presentScoreScreen() {
-        audioPlayer?.stop()
+        OnDeviceTTSService.shared.stopPlaying()
+        isSpeaking = false
 
         let storyboard = UIStoryboard(name: "RolePlayStoryBoard", bundle: nil)
 
@@ -753,18 +742,6 @@ class RoleplayChatViewController: UIViewController {
         present(scoreVC, animated: true)
     }
 
-}
-
-// MARK: - AVAudioPlayerDelegate
-
-extension RoleplayChatViewController: AVAudioPlayerDelegate {
-    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        isSpeaking = false
-        // Keep playAndRecord so both mic recording and future TTS work without session conflicts
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
-        try? session.setActive(true)
-    }
 }
 
 // MARK: - UITableView

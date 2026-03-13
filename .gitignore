@@ -68,6 +68,10 @@ backend/models/kokoro/
 backend/models/huggingface/
 backend/models/nltk_data/
 
+# iOS on-device TTS model artifacts (Supertonic)
+OpenTone/onnx/
+OpenTone/voice_styles/
+
 # User data with PII
 backend/data/speech_profiles.json
 

@@ -17,6 +17,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         // Enable IQKeyboardManager
         IQKeyboardManager.shared.isEnabled = true
         IQKeyboardManager.shared.resignOnTouchOutside = true
+
+        // Warm up on-device TTS early so first spoken response is faster.
+        Task {
+            if (try? await OnDeviceTTSService.shared.preload()) != nil {
+                print("OnDeviceTTSService: model preloaded")
+            }
+        }
         return true
     }
 

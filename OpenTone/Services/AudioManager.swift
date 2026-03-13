@@ -8,6 +8,8 @@ final class AudioManager {
     
     private let audioEngine = AVAudioEngine()
     private var whisperContext: OpaquePointer?
+    private var hasInputTapInstalled = false
+    private var isStartRecordingPending = false
 
     // MARK: - File Recording (for backend /analyze upload)
 
@@ -91,11 +93,14 @@ final class AudioManager {
 
 
     func startRecording() {
-
-        guard !isRecording else { return }
+        guard !isRecording, !isStartRecordingPending else { return }
+        isStartRecordingPending = true
 
         requestPermissions { [weak self] granted in
-            guard let self, granted else {
+            guard let self else { return }
+            self.isStartRecordingPending = false
+
+            guard granted else {
                 print("❌ Mic or Speech permission denied")
                 return
             }
@@ -105,6 +110,8 @@ final class AudioManager {
     }
 
     private func beginRecording() {
+
+        guard !isRecording else { return }
 
         isRecording = true
         currentTranscription = ""
@@ -118,9 +125,19 @@ final class AudioManager {
         // Setup tap for amplitude tracking if needed by callers, 
         // otherwise just let AVAudioRecorder do everything
         let input = audioEngine.inputNode
-        input.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] buffer, _ in 
+        if hasInputTapInstalled {
+            input.removeTap(onBus: 0)
+            hasInputTapInstalled = false
+        }
+
+        if audioEngine.isRunning {
+            audioEngine.stop()
+        }
+
+        input.installTap(onBus: 0, bufferSize: 1024, format: nil) { [weak self] buffer, _ in
             self?.onAudioBuffer?(buffer)
         }
+        hasInputTapInstalled = true
 
         audioEngine.prepare()
         try? audioEngine.start()
@@ -179,12 +196,18 @@ final class AudioManager {
                 
                 // Read PCM frames from the WAV file
                 let file = try AVAudioFile(forReading: url)
+                guard file.length > 0 else {
+                    await MainActor.run { completion(nil) }
+                    return
+                }
+
                 guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false) else {
                     await MainActor.run { completion(nil) }
                     return
                 }
-                
-                guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(file.length)) else {
+
+                let frameCapacity = max(1, AVAudioFrameCount(file.length))
+                guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCapacity) else {
                     await MainActor.run { completion(nil) }
                     return
                 }
@@ -196,6 +219,11 @@ final class AudioManager {
                 }
                 
                 let frameLength = Int(buffer.frameLength)
+                guard frameLength > 0 else {
+                    await MainActor.run { completion(nil) }
+                    return
+                }
+
                 let floats = Array(UnsafeBufferPointer(start: floatChannelData[0], count: frameLength))
                 
                 // Use C API directly as the wrapper is minimal
@@ -245,7 +273,10 @@ final class AudioManager {
         if audioEngine.isRunning {
              audioEngine.stop()
         }
-        audioEngine.inputNode.removeTap(onBus: 0)
+        if hasInputTapInstalled {
+            audioEngine.inputNode.removeTap(onBus: 0)
+            hasInputTapInstalled = false
+        }
     }
 }
 

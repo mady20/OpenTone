@@ -37,7 +37,12 @@ private enum SupabaseConfig {
 /// Central Supabase client — used by all DataModel managers.
 let supabase = SupabaseClient(
     supabaseURL: SupabaseConfig.supabaseURL,
-    supabaseKey: SupabaseConfig.supabaseKey
+    supabaseKey: SupabaseConfig.supabaseKey,
+    options: SupabaseClientOptions(
+        auth: .init(
+            emitLocalSessionAsInitialSession: true
+        )
+    )
 )
 
 // MARK: - Supabase Table Names

@@ -27,8 +27,6 @@ final class AICallController: UIViewController {
 
     // MARK: - Audio / Speech
 
-    private var audioPlayer: AVAudioPlayer?
-
     private var isMuted = false
     private var isListening = false
     private var isProcessing = false   // re-entry guard for handleSilenceDetected
@@ -149,7 +147,7 @@ final class AICallController: UIViewController {
 
     deinit {
         displayLink?.invalidate()
-        audioPlayer?.stop()
+        OnDeviceTTSService.shared.stopPlaying()
         if AudioManager.shared.isRecording {
             AudioManager.shared.stopRecording(autoTranscribe: false)
         }
@@ -340,7 +338,7 @@ final class AICallController: UIViewController {
         if AudioManager.shared.isRecording {
             AudioManager.shared.stopRecording(autoTranscribe: false)
         }
-        audioPlayer?.stop()
+        OnDeviceTTSService.shared.stopPlaying()
     }
 
     // MARK: - Listening
@@ -434,8 +432,8 @@ final class AICallController: UIViewController {
                         self.addBubble(ChatBubble(sender: .ai, text: aiText))
                     }
 
-                    if let audioData = Data(base64Encoded: response.audioWavB64), !audioData.isEmpty {
-                        self.speakAI(audioData: audioData)
+                    if !aiText.isEmpty {
+                        self.speakAI(text: aiText)
                     } else {
                         self.isProcessing = false
                         self.currentState = .idle // Instead of auto listening
@@ -448,23 +446,7 @@ final class AICallController: UIViewController {
                     self.conversationHistory.append(["role": "assistant", "content": fallback])
                     self.addBubble(ChatBubble(sender: .ai, text: fallback))
 
-                    // Try to speak the fallback via backend TTS
-                    Task { [weak self] in
-                        guard let self, !self.isClosing else { return }
-                        if let audioData = try? await BackendSpeechService.shared.tts(text: fallback), !audioData.isEmpty {
-                            await MainActor.run { [weak self] in 
-                                guard let self, !self.isClosing else { return }
-                                self.speakAI(audioData: audioData) 
-                            }
-                        } else {
-                            // TTS failed
-                            await MainActor.run { [weak self] in
-                                guard let self, !self.isClosing else { return }
-                                self.isProcessing = false
-                                self.currentState = .idle // Wait for push-to-talk
-                            }
-                        }
-                    }
+                    self.speakAI(text: fallback)
                 }
             }
         }
@@ -549,8 +531,8 @@ final class AICallController: UIViewController {
                     self.conversationHistory.append(["role": "assistant", "content": aiText])
                     self.addBubble(ChatBubble(sender: .ai, text: aiText))
                     
-                    if let audioData = Data(base64Encoded: response.audioWavB64), !audioData.isEmpty {
-                        self.speakAI(audioData: audioData)
+                    if !aiText.isEmpty {
+                        self.speakAI(text: aiText)
                     } else {
                         self.isProcessing = false
                         self.currentState = .idle
@@ -656,8 +638,8 @@ final class AICallController: UIViewController {
                     self.conversationHistory.append(["role": "assistant", "content": aiText])
                     self.addBubble(ChatBubble(sender: .ai, text: aiText))
 
-                    if let audioData = Data(base64Encoded: response.audioWavB64), !audioData.isEmpty {
-                        self.speakAI(audioData: audioData)
+                    if !aiText.isEmpty {
+                        self.speakAI(text: aiText)
                     } else {
                         self.isProcessing = false
                         self.currentState = .idle
@@ -677,41 +659,28 @@ final class AICallController: UIViewController {
         }
     }
 
-    private func speakAI(audioData: Data) {
+    private func speakAI(text: String) {
         currentState = .speaking
 
-        // Configure audio session BEFORE playing — the very first greeting
-        // fires before startListening() ever runs, so the session may not
-        // be set to .playAndRecord yet.
-        let session = AVAudioSession.sharedInstance()
-        try? session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetoothA2DP])
-        try? session.setActive(true)
-
-        do {
-            audioPlayer = try AVAudioPlayer(data: audioData)
-            audioPlayer?.delegate = self
-            audioPlayer?.prepareToPlay()
-
-            guard audioPlayer?.play() == true else {
-                print("⚠️ Audio player play() returned false")
-                isProcessing = false
-                currentState = .idle
-                return
+        Task { [weak self] in
+            guard let self, !self.isClosing else { return }
+            do {
+                try await OnDeviceTTSService.shared.speak(text: text)
+                await MainActor.run { [weak self] in
+                    guard let self, !self.isClosing else { return }
+                    // Transition from speaking → listening.
+                    currentState = .idle
+                    isProcessing = false
+                    restartListening()
+                }
+            } catch {
+                await MainActor.run { [weak self] in
+                    guard let self, !self.isClosing else { return }
+                    print("❌ On-device TTS failed:", error)
+                    isProcessing = false
+                    currentState = .idle
+                }
             }
-
-            // Safety: if the delegate never fires (e.g. corrupted audio), force transition to idle
-            let safeDuration = (audioPlayer?.duration ?? 5.0) + 3.0
-            DispatchQueue.main.asyncAfter(deadline: .now() + safeDuration) { [weak self] in
-                guard let self, self.currentState == .speaking else { return }
-                print("⚠️ Audio delegate timeout — forcing transition to idle")
-                self.audioPlayer?.stop()
-                self.isProcessing = false
-                self.currentState = .idle
-            }
-        } catch {
-            print("❌ Audio Player setup failed:", error)
-            isProcessing = false
-            self.currentState = .idle
         }
     }
 
@@ -721,7 +690,7 @@ final class AICallController: UIViewController {
         switch gesture.state {
         case .began:
             if currentState == .speaking {
-                audioPlayer?.stop()
+                OnDeviceTTSService.shared.stopPlaying()
             }
             UIView.animate(withDuration: 0.2) {
                 self.recordButton.transform = CGAffineTransform(scaleX: 1.2, y: 1.2)
@@ -749,7 +718,7 @@ final class AICallController: UIViewController {
         displayLink?.invalidate()
         displayLink = nil
 
-        audioPlayer?.stop()
+        OnDeviceTTSService.shared.stopPlaying()
         teardownAudio()
         
         // Show loading overlay
@@ -1016,18 +985,6 @@ final class AICallController: UIViewController {
             coaching: coaching,
             progress: progress
         )
-    }
-}
-
-// MARK: - AVAudioPlayerDelegate
-
-extension AICallController: AVAudioPlayerDelegate {
-    func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-        // Transition from speaking → listening.
-        // Reset state first so restartListening's guards pass.
-        currentState = .idle
-        isProcessing = false
-        restartListening()
     }
 }
 
