@@ -280,18 +280,85 @@ final class SignupViewController: UIViewController {
         }
 
         Task { @MainActor in
-            guard let user = await UserDataModel.shared.registerWithSupabaseAuth(
+            let (user, error) = await UserDataModel.shared.registerWithSupabaseAuthAndError(
                 name: name,
                 email: email,
                 password: password
-            ) else {
-                showUserExistsAlert()
+            )
+            
+            // Check if email confirmation is pending
+            if let error = error, error == "EMAIL_CONFIRMATION_PENDING" {
+                showEmailConfirmationAlert(email: email)
+                return
+            }
+            
+            guard let user = user else {
+                showErrorAlert(message: error ?? "Signup failed. Please try again.")
                 return
             }
 
             SessionManager.shared.login(user: user)
             goToUserInfo()
         }
+    }
+
+    private func showEmailConfirmationAlert(email: String) {
+        let alert = UIAlertController(
+            title: "Confirm Your Email",
+            message: "A confirmation email has been sent to \(email). Please check your email and click the confirmation link to complete your signup.",
+            preferredStyle: .alert
+        )
+
+        alert.addAction(
+            UIAlertAction(title: "I've Confirmed My Email", style: .default) { [weak self] _ in
+                // After user confirms, try to log in
+                self?.attemptLoginAfterConfirmation(email: email)
+            }
+        )
+
+        alert.addAction(
+            UIAlertAction(title: "Cancel", style: .cancel) { [weak self] _ in
+                // Clear the signup form
+                self?.clearSignupForm()
+            }
+        )
+
+        present(alert, animated: true)
+    }
+
+    private func attemptLoginAfterConfirmation(email: String) {
+        guard let password = passwordField.text else { return }
+        
+        Task { @MainActor in
+            guard let user = await UserDataModel.shared.authenticate(email: email, password: password) else {
+                showErrorAlert(message: "Could not log in. Please try signing in manually.")
+                return
+            }
+
+            SessionManager.shared.login(user: user)
+            goToUserInfo()
+        }
+    }
+
+    private func clearSignupForm() {
+        nameField.text = ""
+        emailField.text = ""
+        passwordField.text = ""
+        validateInputs()
+    }
+
+    private func showErrorAlert(message: String) {
+        let alert = UIAlertController(
+            title: "Signup Failed",
+            message: message,
+            preferredStyle: .alert
+        )
+
+        alert.addAction(
+            UIAlertAction(title: "OK", style: .default)
+        )
+
+        present(alert, animated: true)
     }
 
     private func showUserExistsAlert() {

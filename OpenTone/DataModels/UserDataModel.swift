@@ -76,7 +76,11 @@ final class UserDataModel {
     /// Registers credentials in Supabase Auth, then upserts a profile row in `users`.
     func registerWithSupabaseAuth(name: String, email: String, password: String) async -> User? {
         do {
+            // Attempt signup
             try await SupabaseAuth.signUp(email: email, password: password)
+            
+            // After signup succeeds, try to sign in
+            // Note: if email confirmation is required, this will fail
             let authUser = try await SupabaseAuth.signIn(email: email, password: password)
             var user = User(
                 name: name,
@@ -97,7 +101,104 @@ final class UserDataModel {
             return user
         } catch {
             print("❌ Supabase signup error: \(error.localizedDescription)")
+            // Log the full error for debugging
+            print("❌ Full error: \(error)")
             return nil
+        }
+    }
+
+    /// Registers with Supabase Auth and returns both user and error message for better error handling
+    /// When email confirmation is required, returns success but with a confirmation message
+    func registerWithSupabaseAuthAndError(name: String, email: String, password: String) async -> (user: User?, error: String?) {
+        do {
+            // Attempt signup
+            try await SupabaseAuth.signUp(email: email, password: password)
+            
+            // After signup succeeds, try to sign in
+            do {
+                let authUser = try await SupabaseAuth.signIn(email: email, password: password)
+                var user = User(
+                    name: name,
+                    email: email,
+                    password: "",
+                    country: nil,
+                    avatar: "pp1"
+                )
+                user.setID(authUser.id)
+
+                await insertUserInSupabase(user)
+                await MainActor.run {
+                    self.setCurrentUser(user)
+                    if !self.allUsers.contains(where: { $0.id == user.id }) {
+                        self.allUsers.append(user)
+                    }
+                }
+                return (user: user, error: nil)
+            } catch {
+                // Sign in failed, but signup succeeded - likely due to email confirmation requirement
+                let signInError = error.localizedDescription.lowercased()
+                
+                // If it's an email confirmation issue, still create the user locally
+                if signInError.contains("confirm") || signInError.contains("unconfirmed") || signInError.contains("verification") {
+                    print("⚠️ Email confirmation required - creating local user record")
+                    
+                    // Create a temporary user with a temporary ID
+                    // This will be updated once email is confirmed
+                    var user = User(
+                        name: name,
+                        email: email,
+                        password: "",
+                        country: nil,
+                        avatar: "pp1"
+                    )
+                    // Generate a temporary UUID - will be replaced after email confirmation
+                    user.setID(UUID())
+                    
+                    await MainActor.run {
+                        self.setCurrentUser(user)
+                        if !self.allUsers.contains(where: { $0.id == user.id }) {
+                            self.allUsers.append(user)
+                        }
+                    }
+                    
+                    // Return special message indicating email confirmation is pending
+                    return (user: user, error: "EMAIL_CONFIRMATION_PENDING")
+                }
+                
+                // For other sign-in errors, propagate them
+                throw error
+            }
+        } catch {
+            let errorMessage = error.localizedDescription
+            print("❌ Supabase signup error: \(errorMessage)")
+            print("❌ Full error: \(error)")
+            
+            // Check if it's a "user already exists" error
+            if errorMessage.lowercased().contains("already") || errorMessage.lowercased().contains("exist") {
+                return (user: nil, error: "An account with this email already exists.")
+            }
+            
+            // For email confirmation required errors
+            if errorMessage.lowercased().contains("confirm") || errorMessage.lowercased().contains("verification") || errorMessage.lowercased().contains("unconfirmed") {
+                return (user: nil, error: "EMAIL_CONFIRMATION_PENDING")
+            }
+            
+            // For rate limit errors
+            if errorMessage.lowercased().contains("rate limit") {
+                return (user: nil, error: "Too many signup attempts. Please wait a few minutes before trying again.")
+            }
+            
+            // For email invalid errors
+            if errorMessage.lowercased().contains("invalid") && errorMessage.lowercased().contains("email") {
+                return (user: nil, error: "The email address you entered is invalid. Please check and try again.")
+            }
+            
+            // For provider disabled errors
+            if errorMessage.lowercased().contains("disabled") {
+                return (user: nil, error: "Email signups are currently disabled. Please try again later.")
+            }
+            
+            return (user: nil, error: errorMessage)
         }
     }
 
