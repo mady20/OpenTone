@@ -39,59 +39,43 @@ final class BackendSpeechService {
         let difficulty: String
     }
 
-    // MARK: - POST /analyze/audio  (multipart — Whisper path)
+    // MARK: - POST /analyze/audio -> Changed to use Transcript and duration instead
+    
+    /// Use JSON payload with transcription since we're using WhisperKit on-device
+    func analyzeAudio(
+        transcript: String,
+        durationS: Double,
+        userId:    String,
+        sessionId: String
+    ) async throws -> SpeechAnalysisResponse {
+        return try await analyze(
+            audioURL: nil,
+            transcript: transcript,
+            durationS: durationS,
+            userId: userId,
+            sessionId: sessionId
+        )
+    }
 
-    /// Upload raw .m4a to the backend so Whisper transcribes it with real word timestamps.
+    // Deprecated matching old signature
     func analyzeAudio(
         fileURL:   URL,
         userId:    String,
         sessionId: String
     ) async throws -> SpeechAnalysisResponse {
-        guard let url = URL(string: "\(baseURL)/analyze/audio") else {
-            throw BackendError.httpError(0, "Invalid URL")
+        // Fallback for unexpected use cases where only URL is available
+        guard let data = try? Data(contentsOf: fileURL) else {
+            throw BackendError.noInput
         }
-
-        let boundary = "OpenTone-\(UUID().uuidString)"
-        var request  = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 180  // Whisper can take 30–90 s on first run
-
-        let audioData = try Data(contentsOf: fileURL)
-        request.httpBody = buildMultipart(
-            boundary:  boundary,
-            audio:     audioData,
-            userId:    userId,
+        
+        let response = try await transcribe(audioData: data, userId: userId)
+        return try await analyze(
+            audioURL: nil,
+            transcript: response.transcript,
+            durationS: 30.0, // Assuming a fallback duration
+            userId: userId,
             sessionId: sessionId
         )
-
-        return try await fetchDecoded(request)
-    }
-
-    private func buildMultipart(boundary: String, audio: Data, userId: String, sessionId: String) -> Data {
-        var body = Data()
-        let crlf = "\r\n"
-        let dash = "--"
-
-        func appendText(_ name: String, _ value: String) {
-            body.append("\(dash)\(boundary)\(crlf)".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"\(name)\"\(crlf)\(crlf)".data(using: .utf8)!)
-            body.append(value.data(using: .utf8)!)
-            body.append(crlf.data(using: .utf8)!)
-        }
-
-        appendText("user_id",    userId)
-        appendText("session_id", sessionId)
-
-        // Audio file field
-        body.append("\(dash)\(boundary)\(crlf)".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"audio.m4a\"\(crlf)".data(using: .utf8)!)
-        body.append("Content-Type: audio/mp4\(crlf)\(crlf)".data(using: .utf8)!)
-        body.append(audio)
-        body.append(crlf.data(using: .utf8)!)
-
-        body.append("\(dash)\(boundary)\(dash)\(crlf)".data(using: .utf8)!)
-        return body
     }
 
     // MARK: - POST /transcribe (Quick whisper-only ASR)
@@ -205,6 +189,45 @@ final class BackendSpeechService {
     /// Send one audio chunk from the AI Call screen.
     /// Returns the AI's text reply, WAV audio bytes, and per-turn metrics.
     func analyzeChat(
+        transcript: String,
+        durationS: Double,
+        userId: String,
+        mode: String = "call",
+        scenario: String = "",
+        difficulty: String = "medium",
+        conversationHistory: [[String: String]] = []
+    ) async throws -> ChatResponse {
+        guard let url = URL(string: "\(baseURL)/chat") else {
+            throw BackendError.httpError(0, "Invalid URL")
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 90
+
+        let body: [String: Any] = [
+            "user_id": userId,
+            "mode": mode,
+            "scenario": scenario,
+            "difficulty": difficulty,
+            "conversation_history": conversationHistory,
+            "transcript": transcript,
+            "duration_s": durationS
+        ]
+        
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+
+        let chatResponse: ChatResponse = try await fetchDecoded(request)
+
+        // Persist WPM delta for dashboard ProgressCell
+        UserDefaults.standard.set(chatResponse.metrics.wpm, forKey: "opentone.lastWpmDelta")
+
+        return chatResponse
+    }
+
+    /// Backwards compatible analyzeChat returning a dummy audio dependency execution graph
+    func analyzeChat(
         audioData: Data,
         userId: String,
         mode: String = "call",
@@ -221,8 +244,7 @@ final class BackendSpeechService {
         request.httpMethod = "POST"
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 90
-
-        // Encode conversation history as JSON string
+        
         let historyJSON = (try? JSONSerialization.data(withJSONObject: conversationHistory)).flatMap {
             String(data: $0, encoding: .utf8)
         } ?? "[]"
@@ -273,8 +295,8 @@ final class BackendSpeechService {
 
         // Audio field
         body.append("\(dash)\(boundary)\(crlf)".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"chunk.m4a\"\(crlf)".data(using: .utf8)!)
-        body.append("Content-Type: audio/mp4\(crlf)\(crlf)".data(using: .utf8)!)
+        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"chunk.wav\"\(crlf)".data(using: .utf8)!)
+        body.append("Content-Type: audio/wav\(crlf)\(crlf)".data(using: .utf8)!)
         body.append(audioData)
         body.append(crlf.data(using: .utf8)!)
 
@@ -299,40 +321,23 @@ final class BackendSpeechService {
             throw BackendError.httpError(0, "Invalid URL")
         }
 
-        let boundary = "OpenTone-EndSession-\(UUID().uuidString)"
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 120
 
-        var body = Data()
-        let crlf = "\r\n"
-        let dash = "--"
-
-        func appendText(_ name: String, _ value: String) {
-            body.append("\(dash)\(boundary)\(crlf)".data(using: .utf8)!)
-            body.append("Content-Disposition: form-data; name=\"\(name)\"\(crlf)\(crlf)".data(using: .utf8)!)
-            body.append(value.data(using: .utf8)!)
-            body.append(crlf.data(using: .utf8)!)
-        }
-
-        appendText("user_id", userId)
-        appendText("session_id", sessionId)
-        appendText("mode", mode)
-        appendText("full_transcript", fullTranscript)
-        appendText("total_duration_s", String(totalDurationS))
-        appendText("turn_summaries_json", encodeJSONString(turnSummaries))
-
-        // Audio file field — send last chunk or a minimal placeholder
-        let audioData = (lastAudioData != nil && lastAudioData!.count > 100) ? lastAudioData! : _minimalWav()
-        body.append("\(dash)\(boundary)\(crlf)".data(using: .utf8)!)
-        body.append("Content-Disposition: form-data; name=\"file\"; filename=\"final.m4a\"\(crlf)".data(using: .utf8)!)
-        body.append("Content-Type: audio/mp4\(crlf)\(crlf)".data(using: .utf8)!)
-        body.append(audioData)
-        body.append(crlf.data(using: .utf8)!)
-
-        body.append("\(dash)\(boundary)\(dash)\(crlf)".data(using: .utf8)!)
-        request.httpBody = body
+        let body: [String: Any] = [
+            "user_id": userId,
+            "session_id": sessionId,
+            "mode": mode,
+            "full_transcript": fullTranscript,
+            "total_duration_s": totalDurationS,
+            "turn_summaries": (try? JSONEncoder().encode(turnSummaries)).flatMap {
+                try? JSONSerialization.jsonObject(with: $0)
+            } ?? []
+        ]
+        
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         return try await fetchDecoded(request)
     }

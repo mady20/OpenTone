@@ -154,11 +154,8 @@ class FeedbackCollectionViewController: UIViewController {
     // MARK: - Network
 
     private func fetchAnalysis() {
-        isLoading = true
-        collectionView.reloadData()
-
-        // If a preloaded response was injected, use it directly
-        if let preloaded = preloadedResponse {
+        // If the caller already provided an analysis, don't refetch
+        if let preloaded = analysisResponse {
             self.analysisResponse = preloaded
             self.feedback = BackendSpeechService.toFeedback(preloaded)
             self.isLoading = false
@@ -170,12 +167,20 @@ class FeedbackCollectionViewController: UIViewController {
             do {
                 let response: SpeechAnalysisResponse
 
-                // Prefer multipart audio upload (Whisper analysis)
+                // Prefer extracting transcription locally
                 if let urlString = audioURL,
                    let fileURL = URL(string: urlString),
                    FileManager.default.fileExists(atPath: fileURL.path) {
+                    
+                    self.transcript = await withCheckedContinuation { continuation in
+                        AudioManager.shared.transcribeFile(at: fileURL) { text in
+                            continuation.resume(returning: text ?? "")
+                        }
+                    }
+                    
                     response = try await BackendSpeechService.shared.analyzeAudio(
-                        fileURL:   fileURL,
+                        transcript: self.transcript!,
+                        durationS: speakingDuration > 0 ? speakingDuration : 30.0,
                         userId:    userId,
                         sessionId: sessionId
                     )

@@ -34,7 +34,7 @@
                             <constraint firstItem="tad-df-2r3" firstAttribute="top" secondItem="vDu-zF-Fre" secondAttribute="top" id="nVI-dh-hkK"/>
                             <constraint firstItem="vDu-zF-Fre" firstAttribute="trailing" secondItem="tad-df-2r3" secondAttribute="trailing" id="gee-fH-zw9"/>
                             <constraint firstItem="tad-df-2r3" firstAttribute="leading" secondItem="vDu-zF-Fre" secondAttribute="leading" id="vaq-yg-y2a"/>
-                            <constraint firstItem="vDu-zF-Fre" firstAttribute="bottom" secondItem="tad-df-2r3" secondAttribute="bottom" id="x3V-be-XY7"/>
+                            <constraint firstItem="5EZ-qb-Rvc" firstAttribute="bottom" secondItem="tad-df-2r3" secondAttribute="bottom" id="x3V-be-XY7"/>
                         </constraints>
                     </view>
                     <tabBarItem key="tabBarItem" title="Roleplays" image="theatermasks" catalog="system" selectedImage="theatermasks.fill" id="WdY-qp-gHH"/>

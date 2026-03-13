@@ -9,13 +9,11 @@
 /* Begin PBXBuildFile section */
 		0CBCAB422F4370B500CC26D6 /* IQKeyboardManagerSwift in Frameworks */ = {isa = PBXBuildFile; productRef = 0CBCAB412F4370B500CC26D6 /* IQKeyboardManagerSwift */; };
 		9813ABB52F4C164A00B2CA3B /* Supabase in Frameworks */ = {isa = PBXBuildFile; productRef = 9813ABB42F4C164A00B2CA3B /* Supabase */; };
-		984B25FA2F63DB8500E62D81 /* (null) in Frameworks */ = {isa = PBXBuildFile; };
-		984B25FB2F63DB8500E62D81 /* (null) in Frameworks */ = {isa = PBXBuildFile; };
-		98AEF9232F63E71C0007DA1A /* KokoroSwift in Frameworks */ = {isa = PBXBuildFile; productRef = E9FD7D39E11B3F13466B4285 /* KokoroSwift */; };
-		98AEF9242F63E71C0007DA1A /* whisper in Frameworks */ = {isa = PBXBuildFile; productRef = 79D4C9C24FAC68D652C03869 /* whisper */; };
-		98CC6DEE2F63D8640072C60A /* (null) in Frameworks */ = {isa = PBXBuildFile; };
+		984B25FA2F63DB8500E62D81 /* BuildFile in Frameworks */ = {isa = PBXBuildFile; };
+		984B25FB2F63DB8500E62D81 /* BuildFile in Frameworks */ = {isa = PBXBuildFile; };
+		98CC6DEE2F63D8640072C60A /* BuildFile in Frameworks */ = {isa = PBXBuildFile; };
 		98CC6DEF2F63D8640072C60A /* whisper in Frameworks */ = {isa = PBXBuildFile; productRef = 0471BD0DEFCB420B35967BF6 /* whisper */; };
-		98CC6DF02F63D8640072C60A /* (null) in Frameworks */ = {isa = PBXBuildFile; };
+		98CC6DF02F63D8640072C60A /* BuildFile in Frameworks */ = {isa = PBXBuildFile; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -62,13 +60,11 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				98AEF9242F63E71C0007DA1A /* whisper in Frameworks */,
-				98AEF9232F63E71C0007DA1A /* KokoroSwift in Frameworks */,
-				984B25FB2F63DB8500E62D81 /* (null) in Frameworks */,
-				984B25FA2F63DB8500E62D81 /* (null) in Frameworks */,
-				98CC6DF02F63D8640072C60A /* (null) in Frameworks */,
+				984B25FB2F63DB8500E62D81 /* BuildFile in Frameworks */,
+				984B25FA2F63DB8500E62D81 /* BuildFile in Frameworks */,
+				98CC6DF02F63D8640072C60A /* BuildFile in Frameworks */,
 				98CC6DEF2F63D8640072C60A /* whisper in Frameworks */,
-				98CC6DEE2F63D8640072C60A /* (null) in Frameworks */,
+				98CC6DEE2F63D8640072C60A /* BuildFile in Frameworks */,
 				9813ABB52F4C164A00B2CA3B /* Supabase in Frameworks */,
 				0CBCAB422F4370B500CC26D6 /* IQKeyboardManagerSwift in Frameworks */,
 			);
@@ -125,8 +121,6 @@
 			packageProductDependencies = (
 				0CBCAB412F4370B500CC26D6 /* IQKeyboardManagerSwift */,
 				9813ABB42F4C164A00B2CA3B /* Supabase */,
-				E9FD7D39E11B3F13466B4285 /* KokoroSwift */,
-				79D4C9C24FAC68D652C03869 /* whisper */,
 			);
 			productName = OpenTone;
 			productReference = 3FBEA97B2ED55D6300788555 /* OpenTone.app */;
@@ -160,8 +154,7 @@
 			packageReferences = (
 				0C63338D2F43706100E698DC /* XCRemoteSwiftPackageReference "IQKeyboardManager" */,
 				9813ABB32F4C14D000B2CA3B /* XCRemoteSwiftPackageReference "supabase-swift" */,
-				7C433ECB99942D95087C5C5F /* XCRemoteSwiftPackageReference "whisper" */,
-				B7B9AEC3EBA4A096D3CF588B /* XCRemoteSwiftPackageReference "kokoro-ios" */,
+				7C433ECB99942D95087C5C5F /* XCRemoteSwiftPackageReference "whisper.spm" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 3FAE41E82EC43B5E00FADCC1;
@@ -205,7 +198,7 @@
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = XMS7FL5N6N;
 				DISABLE_LIBRARY_VALIDATION = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -251,7 +244,7 @@
 				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = XMS7FL5N6N;
 				DISABLE_LIBRARY_VALIDATION = YES;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -440,7 +433,7 @@
 				minimumVersion = 8.0.2;
 			};
 		};
-		7C433ECB99942D95087C5C5F /* XCRemoteSwiftPackageReference "whisper" */ = {
+		7C433ECB99942D95087C5C5F /* XCRemoteSwiftPackageReference "whisper.spm" */ = {
 			isa = XCRemoteSwiftPackageReference;
 			repositoryURL = "https://github.com/ggerganov/whisper.spm";
 			requirement = {
@@ -456,20 +449,12 @@
 				minimumVersion = 2.5.1;
 			};
 		};
-		B7B9AEC3EBA4A096D3CF588B /* XCRemoteSwiftPackageReference "kokoro-ios" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/mlalma/kokoro-ios";
-			requirement = {
-				branch = main;
-				kind = branch;
-			};
-		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		0471BD0DEFCB420B35967BF6 /* whisper */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 7C433ECB99942D95087C5C5F /* XCRemoteSwiftPackageReference "whisper" */;
+			package = 7C433ECB99942D95087C5C5F /* XCRemoteSwiftPackageReference "whisper.spm" */;
 			productName = whisper;
 		};
 		0CBCAB412F4370B500CC26D6 /* IQKeyboardManagerSwift */ = {
@@ -477,20 +462,10 @@
 			package = 0C63338D2F43706100E698DC /* XCRemoteSwiftPackageReference "IQKeyboardManager" */;
 			productName = IQKeyboardManagerSwift;
 		};
-		79D4C9C24FAC68D652C03869 /* whisper */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 7C433ECB99942D95087C5C5F /* XCRemoteSwiftPackageReference "whisper" */;
-			productName = whisper;
-		};
 		9813ABB42F4C164A00B2CA3B /* Supabase */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 9813ABB32F4C14D000B2CA3B /* XCRemoteSwiftPackageReference "supabase-swift" */;
 			productName = Supabase;
-		};
-		E9FD7D39E11B3F13466B4285 /* KokoroSwift */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = B7B9AEC3EBA4A096D3CF588B /* XCRemoteSwiftPackageReference "kokoro-ios" */;
-			productName = KokoroSwift;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

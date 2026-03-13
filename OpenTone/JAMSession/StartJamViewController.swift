@@ -402,7 +402,7 @@ extension StartJamViewController: TimerManagerDelegate {
         } else {
             speakingDuration = 30.0
         }
-          
+          
         let vc = FeedbackCollectionViewController()
         vc.transcript       = nil
         vc.topic            = session.topic

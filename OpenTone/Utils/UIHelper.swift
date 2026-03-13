@@ -153,7 +153,14 @@ enum UIHelper {
             button.setImage(img, for: .normal)
             button.tintColor = AppColors.textOnPrimary
             button.semanticContentAttribute = .forceLeftToRight
-            button.imageEdgeInsets = UIEdgeInsets(top: 0, left: -4, bottom: 0, right: 4)
+            
+            if #available(iOS 15.0, *) {
+                var config = UIButton.Configuration.plain()
+                config.imagePadding = 4
+                button.configuration = config
+            } else {
+                button.imageEdgeInsets = UIEdgeInsets(top: 0, left: -4, bottom: 0, right: 4)
+            }
         } else {
             button.setImage(nil, for: .normal)
             button.tintColor = AppColors.textOnPrimary

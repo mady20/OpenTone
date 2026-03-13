@@ -45,17 +45,12 @@ final class AICallController: UIViewController {
     private var isRetrying = false
     private var isClosing = false
 
-    // MARK: - Ring Animation
-
+    // MARK: - Wave Animation
     private var displayLink: CADisplayLink?
     private var displayLinkProxy: DisplayLinkProxy?
-    private let ringLayer = CAShapeLayer()
-    private let pulseLayer = CAShapeLayer()
-
+    private let waveLayers: [CAShapeLayer] = (0..<5).map { _ in CAShapeLayer() }
     private var smoothedLevel: CGFloat = 0.1
     private let smoothingFactor: CGFloat = 0.15
-    private let baseRadius: CGFloat = 80
-    private let maxExpansion: CGFloat = 40
 
     // MARK: - UI Elements
 
@@ -79,8 +74,34 @@ final class AICallController: UIViewController {
         return tv
     }()
 
-    private var muteButton: UIButton!
+    private var recordButton: UIButton!
     private var closeButton: UIButton!
+    
+    // Add a loading overlay view for when we are dismissing/getting feedback
+    private let loadingOverlay: UIView = {
+        let view = UIView()
+        view.backgroundColor = AppColors.screenBackground.withAlphaComponent(0.9)
+        view.translatesAutoresizingMaskIntoConstraints = false
+        view.isHidden = true
+        return view
+    }()
+    
+    private let loadingIndicator: UIActivityIndicatorView = {
+        let indicator = UIActivityIndicatorView(style: .large)
+        indicator.color = AppColors.primary
+        indicator.translatesAutoresizingMaskIntoConstraints = false
+        indicator.hidesWhenStopped = true
+        return indicator
+    }()
+    
+    private let loadingLabel: UILabel = {
+        let label = UILabel()
+        label.text = "Generating Feedback..."
+        label.font = .systemFont(ofSize: 16, weight: .medium)
+        label.textColor = AppColors.primary
+        label.translatesAutoresizingMaskIntoConstraints = false
+        return label
+    }()
 
     // MARK: - Data
 
@@ -107,7 +128,7 @@ final class AICallController: UIViewController {
 
         view.backgroundColor = AppColors.screenBackground
 
-        setupRing()
+        setupWave()
         setupUI()
         
         AudioManager.shared.onAudioBuffer = { [weak self] buffer in
@@ -123,14 +144,11 @@ final class AICallController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        ringLayer.frame = view.bounds
-        pulseLayer.frame = view.bounds
-        updateRing(radius: baseRadius)
+        updateWave()
     }
 
     deinit {
         displayLink?.invalidate()
-        invalidateSilenceTimer()
         audioPlayer?.stop()
         if AudioManager.shared.isRecording {
             AudioManager.shared.stopRecording(autoTranscribe: false)
@@ -140,104 +158,115 @@ final class AICallController: UIViewController {
     // MARK: - UI Setup
 
     private func setupUI() {
-        // Status label (above ring)
+        // Status label (above chat)
         view.addSubview(statusLabel)
         NSLayoutConstraint.activate([
             statusLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            statusLabel.centerYAnchor.constraint(equalTo: view.centerYAnchor, constant: -(baseRadius + 40))
+            statusLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 16)
         ])
         currentState = .idle
 
-        // Chat table view (below ring)
+        // Chat table view
         tableView.delegate = self
         tableView.dataSource = self
         tableView.register(ChatBubbleCell.self, forCellReuseIdentifier: ChatBubbleCell.id)
         view.addSubview(tableView)
 
-        _ = view.bounds.midY + baseRadius + maxExpansion + 24
-
         // Buttons
-        muteButton = makeButton(symbol: "mic.fill", action: #selector(toggleMute))
+        recordButton = makeButton(symbol: "mic.fill", action: nil)
         closeButton = makeButton(symbol: "xmark", action: #selector(closeTapped))
-        muteButton.translatesAutoresizingMaskIntoConstraints = false
+        
+        // Setup long press for record button
+        let longPress = UILongPressGestureRecognizer(target: self, action: #selector(handleRecordLongPress(_:)))
+        longPress.minimumPressDuration = 0.0 // trigger immediately on touch down
+        recordButton.addGestureRecognizer(longPress)
+        
+        recordButton.translatesAutoresizingMaskIntoConstraints = false
         closeButton.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(muteButton)
+        view.addSubview(recordButton)
         view.addSubview(closeButton)
+        
+        // Setup overlay on top
+        view.addSubview(loadingOverlay)
+        loadingOverlay.addSubview(loadingIndicator)
+        loadingOverlay.addSubview(loadingLabel)
 
         NSLayoutConstraint.activate([
-            // Table view fills space between ring bottom and buttons
-            tableView.topAnchor.constraint(equalTo: view.centerYAnchor, constant: baseRadius + maxExpansion + 24),
+            // Table view fills space between status label and top of wave animation
+            tableView.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 16),
             tableView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             tableView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            tableView.bottomAnchor.constraint(equalTo: muteButton.topAnchor, constant: -16),
+            tableView.bottomAnchor.constraint(equalTo: recordButton.topAnchor, constant: -64),
 
             // Buttons at bottom
-            muteButton.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 40),
-            muteButton.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -24),
-            muteButton.widthAnchor.constraint(equalToConstant: 56),
-            muteButton.heightAnchor.constraint(equalToConstant: 56),
+            recordButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            recordButton.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -24),
+            recordButton.widthAnchor.constraint(equalToConstant: 72),
+            recordButton.heightAnchor.constraint(equalToConstant: 72),
 
-            closeButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -40),
-            closeButton.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -24),
+            closeButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -32),
+            closeButton.centerYAnchor.constraint(equalTo: recordButton.centerYAnchor),
             closeButton.widthAnchor.constraint(equalToConstant: 56),
             closeButton.heightAnchor.constraint(equalToConstant: 56),
+            
+            // Loading Overlay Constraints
+            loadingOverlay.topAnchor.constraint(equalTo: view.topAnchor),
+            loadingOverlay.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            loadingOverlay.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            loadingOverlay.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            
+            loadingIndicator.centerXAnchor.constraint(equalTo: loadingOverlay.centerXAnchor),
+            loadingIndicator.centerYAnchor.constraint(equalTo: loadingOverlay.centerYAnchor, constant: -20),
+            
+            loadingLabel.topAnchor.constraint(equalTo: loadingIndicator.bottomAnchor, constant: 16),
+            loadingLabel.centerXAnchor.constraint(equalTo: loadingOverlay.centerXAnchor)
         ])
     }
 
-    private func makeButton(symbol: String, action: Selector) -> UIButton {
+    private func makeButton(symbol: String, action: Selector?) -> UIButton {
         let button = UIButton(type: .system)
         UIHelper.styleCircularIconButton(button, symbol: symbol)
-        button.addTarget(self, action: action, for: .touchUpInside)
+        if let action = action {
+            button.addTarget(self, action: action, for: .touchUpInside)
+        }
         return button
     }
 
     private func updateStatusLabel() {
         switch currentState {
-        case .idle:       statusLabel.text = "Tap mic to start"
+        case .idle:       statusLabel.text = "Hold mic to speak"
         case .listening:  statusLabel.text = "Listening…"
         case .processing: statusLabel.text = "Thinking…"
         case .speaking:   statusLabel.text = "Speaking…"
         }
     }
 
-    // MARK: - Ring Animation
+    // MARK: - Wave Animation
 
-    private func setupRing() {
-        // Subtle pulse ring behind main ring
-        pulseLayer.strokeColor = AppColors.primary.withAlphaComponent(0.2).cgColor
-        pulseLayer.fillColor = UIColor.clear.cgColor
-        pulseLayer.lineWidth = 12
-        pulseLayer.lineCap = .round
-        pulseLayer.opacity = 1
-        view.layer.addSublayer(pulseLayer)
-
-        // Main ring
-        ringLayer.strokeColor = AppColors.primary.cgColor
-        ringLayer.fillColor = UIColor.clear.cgColor
-        ringLayer.lineWidth = 8
-        ringLayer.lineCap = .round
-        ringLayer.opacity = 0.9
-        view.layer.addSublayer(ringLayer)
+    private func setupWave() {
+        for (i, layer) in waveLayers.enumerated() {
+            layer.fillColor = UIColor.clear.cgColor
+            layer.strokeColor = AppColors.primary.withAlphaComponent(1.0 - CGFloat(i) * 0.1).cgColor
+            layer.lineWidth = 6
+            layer.lineCap = .round
+            layer.opacity = 0
+            view.layer.addSublayer(layer)
+        }
     }
 
-    private func updateRing(radius: CGFloat) {
-        let center = CGPoint(x: view.bounds.midX, y: view.bounds.midY - 20)
-        ringLayer.path = UIBezierPath(
-            arcCenter: center,
-            radius: radius,
-            startAngle: 0,
-            endAngle: .pi * 2,
-            clockwise: true
-        ).cgPath
-
-        // Pulse ring slightly larger
-        pulseLayer.path = UIBezierPath(
-            arcCenter: center,
-            radius: radius + 6,
-            startAngle: 0,
-            endAngle: .pi * 2,
-            clockwise: true
-        ).cgPath
+    private func updateWave() {
+        let centerY = recordButton.frame.minY - 24
+        let centerX = view.bounds.midX
+        let totalWidth: CGFloat = 160
+        let spacing = totalWidth / CGFloat(waveLayers.count + 1)
+        
+        for (i, layer) in waveLayers.enumerated() {
+            let xPos = centerX - (totalWidth / 2) + spacing * CGFloat(i + 1)
+            let path = UIBezierPath()
+            path.move(to: CGPoint(x: xPos, y: centerY))
+            path.addLine(to: CGPoint(x: xPos, y: centerY)) // initial zero height
+            layer.path = path.cgPath
+        }
     }
 
     private func startDisplayLink() {
@@ -249,27 +278,50 @@ final class AICallController: UIViewController {
 
     @objc func updateAnimation() {
         let targetExpansion: CGFloat
+        var shouldShowWave = false
+        
         switch currentState {
         case .listening:
-            targetExpansion = smoothedLevel * maxExpansion
+            targetExpansion = smoothedLevel * 60
+            shouldShowWave = true
         case .speaking:
-            // Gentle pulsing when AI speaks
             let t = CACurrentMediaTime()
-            targetExpansion = CGFloat(sin(t * 3.0) * 0.3 + 0.3) * maxExpansion * 0.5
+            targetExpansion = CGFloat(sin(t * 6.0) * 0.5 + 0.5) * 40
+            shouldShowWave = true
         case .processing:
-            // Slow breathe when processing
             let t = CACurrentMediaTime()
-            targetExpansion = CGFloat(sin(t * 1.5) * 0.15 + 0.15) * maxExpansion
+            targetExpansion = CGFloat(sin(t * 2.0) * 0.5 + 0.5) * 20
+            shouldShowWave = true
         case .idle:
-            targetExpansion = 0
+            targetExpansion = 2
+            shouldShowWave = false
         }
+        
+        let targetOpacity: Float = shouldShowWave ? 1.0 : 0.0
+        
+        let centerY = recordButton.frame.minY - 32
+        let centerX = view.bounds.midX
+        let totalWidth: CGFloat = 160
+        let spacing = totalWidth / CGFloat(waveLayers.count + 1)
 
-        let currentRadius = baseRadius + targetExpansion
-        updateRing(radius: currentRadius)
+        for (i, layer) in waveLayers.enumerated() {
+            layer.opacity += (targetOpacity - layer.opacity) * 0.15
+            
+            let xPos = centerX - (totalWidth / 2) + spacing * CGFloat(i + 1)
+            
+            // create variation between bars
+            let variation = CGFloat(sin(CACurrentMediaTime() * Double(4 + i) + Double(i)))
+            var barHeight = max(4, targetExpansion * (0.5 + abs(variation) * 0.5))
+            
+            // middle bars are taller
+            let centerDist = abs(CGFloat(i) - CGFloat(waveLayers.count - 1)/2.0)
+            barHeight *= max(0.2, 1.0 - (centerDist * 0.3))
 
-        // Update pulse opacity based on state
-        let targetOpacity: Float = (currentState == .listening) ? 1.0 : 0.4
-        pulseLayer.opacity += (targetOpacity - pulseLayer.opacity) * 0.05
+            let path = UIBezierPath()
+            path.move(to: CGPoint(x: xPos, y: centerY - barHeight/2))
+            path.addLine(to: CGPoint(x: xPos, y: centerY + barHeight/2))
+            layer.path = path.cgPath
+        }
     }
 
     // MARK: - Chat
@@ -294,70 +346,45 @@ final class AICallController: UIViewController {
     // MARK: - Listening
 
     private func startListening() {
-        guard !isMuted else { return }
         guard !isListening else { return }
 
         isListening = true
         isProcessing = false
-        hasSpoken = false
         currentState = .listening
 
         let session = AVAudioSession.sharedInstance()
         try? session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetoothA2DP])
         try? session.setActive(true)
         
-        lastVoiceUpdate = Date()  
-        startSilenceTimer()
-        
         AudioManager.shared.startRecording()
+    }
+
+    private func stopListeningAndProcess() {
+        guard isListening else { return }
+        isListening = false
+        AudioManager.shared.stopRecording(autoTranscribe: false)
+        handleSilenceDetected() // trigger processing manually on button release
     }
 
     private func stopListening() {
         guard isListening else { return }
         isListening = false
-        invalidateSilenceTimer()
         AudioManager.shared.stopRecording(autoTranscribe: false)
     }
 
     private func restartListening() {
         stopListening()
-        guard !isMuted else { return }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
-            guard let self, !self.isMuted else { return }
-            self.startListening()
-        }
+        // Wait for push-to-talk to trigger
+        currentState = .idle
     }
 
-    // MARK: - Silence Detection
+    // MARK: - Silence Detection (Disabled for PTT)
 
-    private func startSilenceTimer() {
-        invalidateSilenceTimer()
-        silenceTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
-            self?.checkSilence()
-        }
-        RunLoop.main.add(silenceTimer!, forMode: .common)
-    }
+    private func startSilenceTimer() {}
+    private func invalidateSilenceTimer() {}
+    private func checkSilence() {}
 
-    private func invalidateSilenceTimer() {
-        silenceTimer?.invalidate()
-        silenceTimer = nil
-    }
-
-    private func checkSilence() {
-        guard isListening, !isProcessing else { return }
-
-        let elapsed = Date().timeIntervalSince(lastVoiceUpdate)
-
-        if hasSpoken && elapsed >= silenceThreshold {
-            // User spoke then went silent → process their turn
-            handleSilenceDetected()
-        } else if !hasSpoken && elapsed >= maxListenDuration {
-            // Safety cap: no voice detected for too long → prompt them
-            handleSilenceDetected()
-        }
-    }
-
-    // MARK: - Audio Processing (for ring animation)
+    // MARK: - Audio Processing (for wave animation)
 
     private func processAudio(_ buffer: AVAudioPCMBuffer) {
         guard !isMuted, currentState == .listening, let data = buffer.floatChannelData?[0] else { return }
@@ -411,7 +438,7 @@ final class AICallController: UIViewController {
                         self.speakAI(audioData: audioData)
                     } else {
                         self.isProcessing = false
-                        self.startListening()
+                        self.currentState = .idle // Instead of auto listening
                     }
                 }
             } catch {
@@ -430,11 +457,11 @@ final class AICallController: UIViewController {
                                 self.speakAI(audioData: audioData) 
                             }
                         } else {
-                            // TTS also failed — just start listening
+                            // TTS failed
                             await MainActor.run { [weak self] in
                                 guard let self, !self.isClosing else { return }
                                 self.isProcessing = false
-                                self.startListening()
+                                self.currentState = .idle // Wait for push-to-talk
                             }
                         }
                     }
@@ -444,16 +471,16 @@ final class AICallController: UIViewController {
     }
 
     private func handleSilenceDetected() {
-        guard !isProcessing, !isClosing else { return }  // prevent re-entry & post-close work
+        guard !isProcessing, !isClosing else { return }  // prevent re-entry
         isProcessing = true
 
         stopListening()
         
         guard let url = AudioManager.shared.lastRecordingURL, 
               let data = try? Data(contentsOf: url),
-              data.count > 1000 else {  // minimum ~1KB to avoid sending noise/silence
+              data.count > 1000 else {
             isProcessing = false
-            restartListening()
+            currentState = .idle // Fallback to idle
             return
         }
 
@@ -461,10 +488,30 @@ final class AICallController: UIViewController {
 
         Task { [weak self] in
             guard let self, !self.isClosing else { return }
+            
+            // Get local transcription first
+            var transcript = ""
+            await withCheckedContinuation { continuation in
+                AudioManager.shared.transcribeFile(at: url) { text in
+                    transcript = text ?? ""
+                    continuation.resume()
+                }
+            }
+            
+            if transcript.isEmpty {
+                await MainActor.run {
+                    self.currentState = .idle
+                    self.isProcessing = false
+                }
+                return
+            }
+            
             do {
                 let userId = UserDataModel.shared.getCurrentUser()?.id.uuidString ?? "demo"
+                let durationS = 5.0 // Fallback estimate, ideally pass real duration
                 let response = try await BackendSpeechService.shared.analyzeChat(
-                    audioData: data,
+                    transcript: transcript,
+                    durationS: durationS,
                     userId: userId,
                     mode: "call",
                     scenario: "Open Conversation",
@@ -506,25 +553,24 @@ final class AICallController: UIViewController {
                         self.speakAI(audioData: audioData)
                     } else {
                         self.isProcessing = false
-                        self.restartListening()
+                        self.currentState = .idle
                     }
                 }
             } catch {
                 await MainActor.run { [weak self] in
                     guard let self, !self.isClosing else { return }
                     print("❌ Backend error:", error.localizedDescription)
-                    // Cache the audio so the user can retry this turn
                     self.lastFailedAudioData = data
                     self.isRetrying = false
-                    let msg = "⚠️ Connection issue — tap here to retry, or keep talking."
+                    let msg = "⚠️ Connection issue — tap here to retry, or hold mic to continue."
                     self.addBubble(ChatBubble(sender: .ai, text: msg))
                     self.isProcessing = false
-                    self.restartListening()
+                    self.currentState = .idle
                 }
             }
         }
     }
-
+    
     /// Retry the last failed conversation turn using cached audio data.
     private func retryLastTurn() {
         guard let cachedAudio = lastFailedAudioData, !isRetrying else { return }
@@ -542,10 +588,37 @@ final class AICallController: UIViewController {
 
         Task { [weak self] in
             guard let self, !self.isClosing else { return }
+            
+            // Re-transcribe the cached audio
+            let tempURL = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("wav")
+            try? cachedAudio.write(to: tempURL)
+            
+            var transcript = ""
+            await withCheckedContinuation { continuation in
+                AudioManager.shared.transcribeFile(at: tempURL) { text in
+                    transcript = text ?? ""
+                    continuation.resume()
+                }
+            }
+            
+            // Clean up
+            try? FileManager.default.removeItem(at: tempURL)
+            
+            if transcript.isEmpty {
+                await MainActor.run {
+                    self.currentState = .idle
+                    self.isProcessing = false
+                    self.isRetrying = false
+                }
+                return
+            }
+            
             do {
                 let userId = UserDataModel.shared.getCurrentUser()?.id.uuidString ?? "demo"
+                let durationS = 5.0
                 let response = try await BackendSpeechService.shared.analyzeChat(
-                    audioData: cachedAudio,
+                    transcript: transcript,
+                    durationS: durationS,
                     userId: userId,
                     mode: "call",
                     scenario: "Open Conversation",
@@ -587,7 +660,7 @@ final class AICallController: UIViewController {
                         self.speakAI(audioData: audioData)
                     } else {
                         self.isProcessing = false
-                        self.restartListening()
+                        self.currentState = .idle
                     }
                 }
             } catch {
@@ -595,22 +668,16 @@ final class AICallController: UIViewController {
                     guard let self, !self.isClosing else { return }
                     self.isRetrying = false
                     self.lastFailedAudioData = cachedAudio
-                    let msg = "Still having trouble — tap here to retry or keep talking."
+                    let msg = "Still having trouble — tap here to retry or hold mic to continue."
                     self.addBubble(ChatBubble(sender: .ai, text: msg))
                     self.isProcessing = false
-                    self.restartListening()
+                    self.currentState = .idle
                 }
             }
         }
     }
 
     private func speakAI(audioData: Data) {
-        guard !isMuted else {
-            isProcessing = false
-            restartListening()
-            return
-        }
-
         currentState = .speaking
 
         // Configure audio session BEFORE playing — the very first greeting
@@ -628,55 +695,70 @@ final class AICallController: UIViewController {
             guard audioPlayer?.play() == true else {
                 print("⚠️ Audio player play() returned false")
                 isProcessing = false
-                restartListening()
+                currentState = .idle
                 return
             }
 
-            // Safety: if the delegate never fires (e.g. corrupted audio), force-start listening
+            // Safety: if the delegate never fires (e.g. corrupted audio), force transition to idle
             let safeDuration = (audioPlayer?.duration ?? 5.0) + 3.0
             DispatchQueue.main.asyncAfter(deadline: .now() + safeDuration) { [weak self] in
                 guard let self, self.currentState == .speaking else { return }
-                print("⚠️ Audio delegate timeout — forcing transition to listening")
+                print("⚠️ Audio delegate timeout — forcing transition to idle")
                 self.audioPlayer?.stop()
                 self.isProcessing = false
-                self.restartListening()
+                self.currentState = .idle
             }
         } catch {
             print("❌ Audio Player setup failed:", error)
             isProcessing = false
-            restartListening()
+            self.currentState = .idle
         }
     }
 
     // MARK: - Button Actions
 
-    @objc private func toggleMute(_ sender: UIButton) {
-        isMuted.toggle()
-        sender.setImage(
-            UIImage(systemName: isMuted ? "mic.slash.fill" : "mic.fill",
-                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 20, weight: .medium)),
-            for: .normal
-        )
-
-        if isMuted {
-            audioPlayer?.stop()
-            teardownAudio()
-            currentState = .idle
-        } else {
+    @objc private func handleRecordLongPress(_ gesture: UILongPressGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            if currentState == .speaking {
+                audioPlayer?.stop()
+            }
+            UIView.animate(withDuration: 0.2) {
+                self.recordButton.transform = CGAffineTransform(scaleX: 1.2, y: 1.2)
+                self.recordButton.alpha = 0.8
+            }
             startListening()
+            
+        case .ended, .cancelled, .failed:
+            UIView.animate(withDuration: 0.2) {
+                self.recordButton.transform = .identity
+                self.recordButton.alpha = 1.0
+            }
+            stopListeningAndProcess()
+            
+        default:
+            break
         }
     }
 
     @objc private func closeTapped() {
         guard !isClosing else { return }
         isClosing = true
-        muteButton.isEnabled = false
+        recordButton.isEnabled = false
         closeButton.isEnabled = false
         displayLink?.invalidate()
         displayLink = nil
 
         audioPlayer?.stop()
         teardownAudio()
+        
+        // Show loading overlay
+        loadingOverlay.isHidden = false
+        loadingOverlay.alpha = 0
+        loadingIndicator.startAnimating()
+        UIView.animate(withDuration: 0.3) {
+            self.loadingOverlay.alpha = 1
+        }
 
         let turnSummaries = sessionTurnSummaries
         sessionTurnSummaries = []
@@ -685,6 +767,11 @@ final class AICallController: UIViewController {
         guard duration > 1, let user = UserDataModel.shared.getCurrentUser() else {
             conversationHistory.removeAll()
             userTranscriptParts.removeAll()
+            
+            // Hide loading overlay before dismissing
+            loadingIndicator.stopAnimating()
+            loadingOverlay.isHidden = true
+            
             dismiss(animated: true)
             return
         }
@@ -710,6 +797,11 @@ final class AICallController: UIViewController {
         guard !fullTranscript.isEmpty || !turnSummaries.isEmpty else {
             conversationHistory.removeAll()
             userTranscriptParts.removeAll()
+            
+            // Hide loading overlay before dismissing
+            loadingIndicator.stopAnimating()
+            loadingOverlay.isHidden = true
+            
             dismiss(animated: true)
             return
         }
@@ -783,6 +875,10 @@ final class AICallController: UIViewController {
             } catch {
                 print("❌ End-session feedback failed: \(error.localizedDescription)")
                 await MainActor.run {
+                    // Hide loading overlay
+                    self.loadingIndicator.stopAnimating()
+                    self.loadingOverlay.isHidden = true
+                    
                     // Build fallback feedback from locally-collected turn summaries
                     let fallbackFeedback = self.buildLocalFallbackFeedback(
                         turnSummaries: turnSummaries,

@@ -1,11 +1,13 @@
 import Foundation
 import AVFAudio
+import whisper
 
 final class AudioManager {
 
     static let shared = AudioManager()
-
+    
     private let audioEngine = AVAudioEngine()
+    private var whisperContext: OpaquePointer?
 
     // MARK: - File Recording (for backend /analyze upload)
 
@@ -25,7 +27,45 @@ final class AudioManager {
     var onFinalTranscription: ((String) -> Void)?
     var onRecordingStateChanged: ((Bool) -> Void)?
 
-    private init() {}
+    private init() {
+        Task {
+            do {
+                print("Loading Whisper model...")
+                // In production, you'd download this model or bundle it with the app.
+                // For demonstration, downloading the tiny model if it doesn't exist
+                let modelURL = try await getModelURL()
+                
+                // Initialize whisper context directly from C API
+                var params = whisper_context_default_params()
+                self.whisperContext = modelURL.path.withCString { path in
+                    return whisper_init_from_file_with_params(path, params)
+                }
+                
+                if self.whisperContext != nil {
+                    print("Whisper loaded successfully")
+                } else {
+                    print("❌ Failed to load Whisper context")
+                }
+            } catch {
+                print("❌ Failed to load Whisper: \(error)")
+            }
+        }
+    }
+    
+    private func getModelURL() async throws -> URL {
+        let fileManager = FileManager.default
+        let documentURL = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first!
+        let modelURL = documentURL.appendingPathComponent("ggml-tiny.en.bin")
+        
+        if fileManager.fileExists(atPath: modelURL.path) {
+            return modelURL
+        }
+        
+        let url = URL(string: "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin")!
+        let (data, _) = try await URLSession.shared.data(from: url)
+        try data.write(to: modelURL)
+        return modelURL
+    }
 
     func setMuted(_ muted: Bool) {
         isMuted = muted
@@ -89,13 +129,16 @@ final class AudioManager {
 
         let tmpURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString)
-            .appendingPathExtension("m4a")
+            .appendingPathExtension("wav")
 
+        // Whisper requires 16kHz WAV format natively without conversions for simplicity
         let settings: [String: Any] = [
-            AVFormatIDKey: Int(kAudioFormatMPEG4AAC),
-            AVSampleRateKey: 44100,
+            AVFormatIDKey: Int(kAudioFormatLinearPCM),
+            AVSampleRateKey: 16000,
             AVNumberOfChannelsKey: 1,
-            AVEncoderAudioQualityKey: AVAudioQuality.medium.rawValue,
+            AVLinearPCMBitDepthKey: 16,
+            AVLinearPCMIsFloatKey: false,
+            AVLinearPCMIsBigEndianKey: false
         ]
 
         audioRecorder = try? AVAudioRecorder(url: tmpURL, settings: settings)
@@ -113,21 +156,86 @@ final class AudioManager {
 
         cleanup()
 
-        // Send to backend Whisper immediately so the UI behaves as before
-        if autoTranscribe, let url = lastRecordingURL, let data = try? Data(contentsOf: url),
+        // Transcribe on-device using SwiftWhisper
+        if autoTranscribe, let url = lastRecordingURL,
            let onFinal = onFinalTranscription {
+            transcribeFile(at: url) { text in
+                onFinal(text ?? "")
+            }
+        }
+    }
+    
+    // Make the transcription capability available globally
+    func transcribeFile(at url: URL, completion: @escaping (String?) -> Void) {
+        Task {
+            guard let context = self.whisperContext else {
+                print("❌ Whisper is not initialized yet")
+                await MainActor.run { completion(nil) }
+                return
+            }
             
-            Task {
-                do {
-                    let response = try await BackendSpeechService.shared.transcribe(audioData: data)
-                    await MainActor.run {
-                        onFinal(response.transcript)
+            do {
+                print("Transcribing on-device...")
+                
+                // Read PCM frames from the WAV file
+                let file = try AVAudioFile(forReading: url)
+                guard let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16000, channels: 1, interleaved: false) else {
+                    await MainActor.run { completion(nil) }
+                    return
+                }
+                
+                guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(file.length)) else {
+                    await MainActor.run { completion(nil) }
+                    return
+                }
+                
+                try file.read(into: buffer)
+                guard let floatChannelData = buffer.floatChannelData else {
+                    await MainActor.run { completion(nil) }
+                    return
+                }
+                
+                let frameLength = Int(buffer.frameLength)
+                let floats = Array(UnsafeBufferPointer(start: floatChannelData[0], count: frameLength))
+                
+                // Use C API directly as the wrapper is minimal
+                var params = whisper_full_default_params(WHISPER_SAMPLING_GREEDY)
+                params.print_progress = false
+                params.print_timestamps = false
+                params.print_special = false
+                params.translate = false
+                params.language = "en".withCString { UnsafePointer($0) }
+                params.n_threads = 4
+                
+                let result = floats.withUnsafeBufferPointer { ptr -> Int32 in
+                    guard let baseAddress = ptr.baseAddress else { return -1 }
+                    return whisper_full(context, params, baseAddress, Int32(floats.count))
+                }
+                
+                if result != 0 {
+                    print("❌ Whisper transcription failed with code: \(result)")
+                    await MainActor.run { completion(nil) }
+                    return
+                }
+                
+                let n_segments = whisper_full_n_segments(context)
+                var resultText = ""
+                
+                for i in 0..<n_segments {
+                    if let cString = whisper_full_get_segment_text(context, i) {
+                        resultText += String(cString: cString)
                     }
-                } catch {
-                    print("❌ Backend Whisper transcription error:", error)
-                    await MainActor.run {
-                        onFinal("")
-                    }
+                }
+                
+                let text = resultText.trimmingCharacters(in: .whitespacesAndNewlines)
+                print("On-device transcription: \(text)")
+                await MainActor.run {
+                    completion(text)
+                }
+            } catch {
+                print("❌ Whisper transcription error:", error)
+                await MainActor.run {
+                    completion(nil)
                 }
             }
         }
