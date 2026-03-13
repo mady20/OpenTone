@@ -148,7 +148,7 @@ final class TwoMinuteJamViewController: UIViewController, UITabBarControllerDele
     }
 
     private func startNewSession() {
-        // Disable button and show loading while LLM generates the topic
+        // Disable button briefly while creating a local topic
         unleashButton.isEnabled = false
         unleashButton.setTitle("  Generating Topic…", for: .normal)
         unleashButton.configuration?.showsActivityIndicator = true

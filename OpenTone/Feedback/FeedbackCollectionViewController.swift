@@ -12,10 +12,10 @@ import UIKit
 
 private enum FeedbackSection: Int, CaseIterable {
     case loading = 0   // spinner while we wait for the backend
-    case scores        // overall / fluency / confidence / clarity rings
-    case metrics       // WPM, fillers, pauses, etc.
-    case coaching      // primary issue + suggestions
-    case transcript    // transcript with filler / pause highlights
+    case scores        // performance snapshot cards
+    case metrics       // speaking signals
+    case coaching      // action plan
+    case transcript    // transcript with in-place mistake annotations
     case progress      // deltas vs. previous session
 }
 
@@ -39,6 +39,9 @@ class FeedbackCollectionViewController: UIViewController {
     var sessionId: String = ""
     var userId: String = "demo"
     var audioURL: String?          // local file:// or remote URL
+    var sessionMode: FeedbackSessionMode = .jam
+    var activityType: ActivityType = .jam
+    var feedbackEngine: FeedbackEngine = FeedbackEngineFactory.makeDefault()
 
     /// Pre-fetched response — if set, the VC skips its own network call.
     /// Used by AI Call and Roleplay to inject the already-fetched analysis.
@@ -151,76 +154,66 @@ class FeedbackCollectionViewController: UIViewController {
         )
     }
 
-    // MARK: - Network
+    // MARK: - Analysis
 
     private func fetchAnalysis() {
         // If the caller already provided an analysis, don't refetch
-        if let preloaded = analysisResponse {
+        if let preloaded = preloadedResponse {
             self.analysisResponse = preloaded
-            self.feedback = BackendSpeechService.toFeedback(preloaded)
+            self.feedback = FeedbackMapper.toFeedback(preloaded)
             self.isLoading = false
             self.collectionView.reloadData()
             return
         }
 
         Task {
-            do {
-                let response: SpeechAnalysisResponse
+            let response: SpeechAnalysisResponse
+            var resolvedTranscript = transcript ?? ""
 
-                // Prefer extracting transcription locally
+                     // Prefer extracting transcription locally from the recorded file.
                 if let urlString = audioURL,
                    let fileURL = URL(string: urlString),
                    FileManager.default.fileExists(atPath: fileURL.path) {
-                    
-                    self.transcript = await withCheckedContinuation { continuation in
+
+                    resolvedTranscript = await withCheckedContinuation { continuation in
                         AudioManager.shared.transcribeFile(at: fileURL) { text in
                             continuation.resume(returning: text ?? "")
                         }
                     }
-                    
-                    response = try await BackendSpeechService.shared.analyzeAudio(
-                        transcript: self.transcript!,
-                        durationS: speakingDuration > 0 ? speakingDuration : 30.0,
-                        userId:    userId,
-                        sessionId: sessionId
-                    )
-                } else {
-                    // Fallback to text-only /analyze
-                    response = try await BackendSpeechService.shared.analyze(
-                        audioURL:   audioURL,
-                        transcript: transcript,
-                        durationS:  speakingDuration,
-                        userId:     userId,
-                        sessionId:  sessionId
-                    )
                 }
 
-                self.analysisResponse = response
-                self.feedback = BackendSpeechService.toFeedback(response)
-                self.isLoading = false
-                await MainActor.run {
-                    self.collectionView.reloadData()
-                }
-                self.persistFeedbackToHistory(response)
+                self.transcript = resolvedTranscript
 
-            } catch {
-                self.errorMessage = error.localizedDescription
-                self.isLoading = false
-                await MainActor.run {
-                    self.collectionView.reloadData()
-                }
+                // Analyze via feedback engine (on-device core + optional enhancement provider).
+                let input = FeedbackEngineInput(
+                    transcript: resolvedTranscript,
+                    topic: topic ?? "",
+                    durationS: speakingDuration > 0 ? speakingDuration : 30.0,
+                    userId: userId,
+                    sessionId: sessionId,
+                    mode: sessionMode,
+                    turnSummaries: []
+                )
+                response = await feedbackEngine.analyze(input)
+
+            self.analysisResponse = response
+            self.feedback = FeedbackMapper.toFeedback(response)
+            self.isLoading = false
+            await MainActor.run {
+                self.collectionView.reloadData()
             }
+            self.persistFeedbackToHistory(response)
         }
     }
 
     /// Persist the analysis result as a SessionFeedback on the most recent matching activity.
     private func persistFeedbackToHistory(_ response: SpeechAnalysisResponse) {
         let sid = UUID(uuidString: sessionId) ?? UUID()
-        let sessionFeedback = BackendSpeechService.toSessionFeedback(response, sessionId: sid)
+        let sessionFeedback = FeedbackMapper.toSessionFeedback(response, sessionId: sid)
 
-        // Attach to the Jam activity that was already logged (without feedback)
+        // Attach to the latest activity for this session type.
         HistoryDataModel.shared.attachFeedbackToLatestActivity(
-            type: .jam,
+            type: activityType,
             feedback: sessionFeedback
         )
     }
@@ -253,6 +246,7 @@ class FeedbackCollectionViewController: UIViewController {
         lbl.font = font
         lbl.textColor = color
         lbl.numberOfLines = lines
+        lbl.adjustsFontForContentSizeCategory = true
         lbl.translatesAutoresizingMaskIntoConstraints = false
         cell.contentView.addSubview(lbl)
         NSLayoutConstraint.activate([
@@ -269,6 +263,7 @@ class FeedbackCollectionViewController: UIViewController {
         let lbl = UILabel()
         lbl.attributedText = attributedText
         lbl.numberOfLines = 0
+        lbl.adjustsFontForContentSizeCategory = true
         lbl.translatesAutoresizingMaskIntoConstraints = false
         cell.contentView.addSubview(lbl)
         NSLayoutConstraint.activate([
@@ -284,35 +279,28 @@ class FeedbackCollectionViewController: UIViewController {
         if !llmSuggestions.isEmpty {
             return Array(llmSuggestions.prefix(4))
         }
-        return Array((feedback.coaching?.suggestions ?? []).prefix(4))
+        return Array((feedback.coaching?.suggestions ?? []).prefix(4)).enumerated().map { index, suggestion in
+            "Step \(index + 1): \(suggestion)"
+        }
     }
 
     private func coachingFocus(from response: SpeechAnalysisResponse, feedback: Feedback) -> String {
         let llmPrimary = response.coaching.llmCoaching?.primaryIssue.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if !llmPrimary.isEmpty {
-            return llmPrimary
+            return "\(severityPrefix(from: response.coaching.scores)) \(llmPrimary)"
         }
-        return feedback.coaching?.primaryIssueTitle ?? "Good job!"
+        let focus = feedback.coaching?.primaryIssueTitle ?? "Good job"
+        let detail = response.coaching.primaryIssue
+        return "\(severityPrefix(from: response.coaching.scores)) \(focus): \(detail)"
     }
 
-    private func transcriptSummary(from response: SpeechAnalysisResponse) -> String? {
-        var parts: [String] = []
-
-        if !response.metrics.fillerExamples.isEmpty {
-            let fillerText = response.metrics.fillerExamples.prefix(5).map {
-                "• \($0.word) at \(timestampString($0.timestamp))"
-            }.joined(separator: "\n")
-            parts.append("Filler words\n\(fillerText)")
+    private func severityPrefix(from scores: CoachingScores) -> String {
+        let overall = scores.overall
+        switch overall {
+        case ..<45: return "High priority"
+        case ..<70: return "Medium priority"
+        default: return "Low priority"
         }
-
-        if !response.metrics.pauseExamples.isEmpty {
-            let pauseText = response.metrics.pauseExamples.prefix(5).map {
-                "• \(timestampString($0.start)) for \(String(format: "%.1f", $0.duration))s"
-            }.joined(separator: "\n")
-            parts.append("Long pauses\n\(pauseText)")
-        }
-
-        return parts.isEmpty ? nil : parts.joined(separator: "\n\n")
     }
 
     private func timestampString(_ time: Double) -> String {
@@ -335,7 +323,7 @@ class FeedbackCollectionViewController: UIViewController {
             let ratio = min(max(pause.start / totalDuration, 0), 1)
             let rawIndex = Int((Double(words.count) * ratio).rounded())
             let insertionIndex = min(max(rawIndex, 1), words.count)
-            let marker = "⏸ \(String(format: "%.1f", pause.duration))s pause"
+            let marker = "[⏸ \(String(format: "%.1f", pause.duration))s pause]"
             insertions[insertionIndex, default: []].append(marker)
         }
 
@@ -359,18 +347,19 @@ class FeedbackCollectionViewController: UIViewController {
         let attributed = NSMutableAttributedString(
             string: displayText,
             attributes: [
-                .font: UIFont.systemFont(ofSize: 15),
-                .foregroundColor: UIColor.label,
+                .font: UIFont.preferredFont(forTextStyle: .body),
+                .foregroundColor: AppColors.textPrimary,
             ]
         )
 
         let fullRange = NSRange(location: 0, length: (displayText as NSString).length)
-        let pausePattern = "⏸\\s[0-9.]+s\\spause"
+        let pausePattern = "\\[⏸\\s[0-9.]+s\\spause\\]"
         if let regex = try? NSRegularExpression(pattern: pausePattern, options: []) {
             regex.matches(in: displayText, options: [], range: fullRange).forEach { match in
                 attributed.addAttributes([
                     .foregroundColor: UIColor.systemBlue,
-                    .font: UIFont.systemFont(ofSize: 15, weight: .semibold),
+                    .font: UIFont.preferredFont(forTextStyle: .callout),
+                    .backgroundColor: UIColor.systemBlue.withAlphaComponent(0.14),
                 ], range: match.range)
             }
         }
@@ -382,13 +371,120 @@ class FeedbackCollectionViewController: UIViewController {
             regex.matches(in: displayText, options: [], range: fullRange).forEach { match in
                 attributed.addAttributes([
                     .foregroundColor: UIColor.systemOrange,
-                    .font: UIFont.systemFont(ofSize: 15, weight: .semibold),
-                    .backgroundColor: UIColor.systemOrange.withAlphaComponent(0.18),
+                    .font: UIFont.preferredFont(forTextStyle: .body),
+                    .backgroundColor: UIColor.systemOrange.withAlphaComponent(0.2),
                 ], range: match.range)
             }
         }
 
+        let repetitionPattern = "\\b([A-Za-z']+)\\b(?:\\W+\\1\\b)+"
+        if let regex = try? NSRegularExpression(pattern: repetitionPattern, options: [.caseInsensitive]) {
+            regex.matches(in: displayText, options: [], range: fullRange).forEach { match in
+                attributed.addAttributes([
+                    .foregroundColor: UIColor.systemRed,
+                    .backgroundColor: UIColor.systemRed.withAlphaComponent(0.14),
+                    .underlineStyle: NSUnderlineStyle.single.rawValue,
+                ], range: match.range)
+            }
+        }
+
+        for range in paceRiskRanges(in: displayText, wpm: response.metrics.wpm) {
+            attributed.addAttributes([
+                .underlineStyle: NSUnderlineStyle.patternDot.union(.single).rawValue,
+                .underlineColor: UIColor.systemPurple,
+            ], range: range)
+        }
+
         return attributed
+    }
+
+    private func paceRiskRanges(in transcript: String, wpm: Double) -> [NSRange] {
+        guard wpm >= 170 else { return [] }
+
+        let nsText = transcript as NSString
+        let sentenceParts = transcript.split(whereSeparator: { ".!?".contains($0) })
+        var ranges: [NSRange] = []
+
+        for part in sentenceParts {
+            let sentence = String(part).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !sentence.isEmpty else { continue }
+
+            let words = sentence.split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            if words.count >= 22 {
+                let range = nsText.range(of: sentence)
+                if range.location != NSNotFound {
+                    ranges.append(range)
+                }
+            }
+        }
+
+        return ranges
+    }
+
+    private func transcriptLegendEntries(from response: SpeechAnalysisResponse) -> [String] {
+        var entries: [String] = []
+
+        if response.metrics.fillers > 0 {
+            entries.append("🟧 Filler word: highlighted phrase to reduce in next attempt.")
+        }
+        if response.metrics.pauses > 0 {
+            entries.append("🔵 [⏸ xs pause]: inferred pause point and duration inside your transcript.")
+        }
+        if response.metrics.repetitions > 0 {
+            entries.append("🔴 Underline + tint: repeated restart phrase.")
+        }
+        if response.metrics.wpm >= 170 {
+            entries.append("🟣 Dotted underline: dense fast segment that may reduce clarity.")
+        }
+
+        if entries.isEmpty {
+            entries.append("No major mistake markers detected in this transcript.")
+        }
+
+        return entries
+    }
+
+    private func transcriptMistakeTotals(from response: SpeechAnalysisResponse) -> String {
+        let paceAlerts = paceRiskRanges(in: response.transcript, wpm: response.metrics.wpm).count
+        let paceText = paceAlerts > 0 ? "⚡ Pace alerts: \(paceAlerts)" : "⚡ Pace alerts: 0"
+        return [
+            "🟧 Fillers: \(response.metrics.fillers)",
+            "🔵 Pauses: \(response.metrics.pauses)",
+            "🔴 Repetitions: \(response.metrics.repetitions)",
+            paceText,
+        ].joined(separator: "   •   ")
+    }
+
+    private func scoreDescriptor(_ value: Double) -> String {
+        switch value {
+        case 85...: return "Strong"
+        case 70..<85: return "Good"
+        case 55..<70: return "Needs focus"
+        default: return "Priority"
+        }
+    }
+
+    private func metricLines(from feedback: Feedback, response: SpeechAnalysisResponse) -> [String] {
+        let wpm = Int(feedback.wordsPerMinute.rounded())
+        let wpmLabel: String
+        if wpm < 110 {
+            wpmLabel = "Slow"
+        } else if wpm > 170 {
+            wpmLabel = "Fast"
+        } else {
+            wpmLabel = "Steady"
+        }
+
+        let fillerLabel = response.metrics.fillers == 0 ? "Clean" : (response.metrics.fillers <= 3 ? "Manageable" : "High")
+        let pauseLabel = response.metrics.pauses == 0 ? "Smooth" : (response.metrics.avgPauseS < 1.2 ? "Natural" : "Hesitant")
+        let durationLabel = feedback.durationInSeconds >= 28 ? "Full run" : "Short run"
+
+        return [
+            "🗣  Pace: \(wpm) WPM · \(wpmLabel)",
+            "😬  Fillers: \(feedback.fillerWordCount ?? 0) · \(fillerLabel)",
+            "⏸  Pauses: \(feedback.pauseCount ?? 0) · \(pauseLabel)",
+            "⏱  Duration: \(String(format: "%.0f", feedback.durationInSeconds))s · \(durationLabel)",
+        ]
     }
 
     private func scoreCard(_ cell: UICollectionViewCell, title: String, value: Double) {
@@ -443,8 +539,8 @@ extension FeedbackCollectionViewController: UICollectionViewDataSource {
         case .loading:       return 0
         case .scores:        return 4   // overall, fluency, confidence, clarity
         case .metrics:       return 4   // WPM, fillers, pauses, duration
-        case .coaching:      return 1 + coachingSuggestions(from: resp, feedback: fb).count
-        case .transcript:    return transcriptSummary(from: resp) == nil ? 1 : 2
+        case .coaching:      return 1   // primary focus card only
+        case .transcript:    return 3   // transcript, legend, totals
         case .progress:      return 1   // deltas card
         }
     }
@@ -491,19 +587,14 @@ extension FeedbackCollectionViewController: UICollectionViewDataSource {
                 fb.coaching?.scores.confidence ?? 0,
                 fb.coaching?.scores.clarity ?? 0,
             ]
-            scoreCard(cell, title: titles[indexPath.item], value: values[indexPath.item])
+            scoreCard(cell, title: "\(titles[indexPath.item]) • \(scoreDescriptor(values[indexPath.item]))", value: values[indexPath.item])
             return cell
 
         // --- Metrics ---
         case .metrics:
             let cell = cv.dequeueReusableCell(withReuseIdentifier: metricCellId, for: indexPath)
             makeCard(cell)
-            let labels = [
-                "🗣  \(Int(fb.wordsPerMinute)) WPM",
-                "😬  \(fb.fillerWordCount ?? 0) filler words",
-                "⏸  \(fb.pauseCount ?? 0) long pauses",
-                "⏱  \(String(format: "%.0f", fb.durationInSeconds))s spoken",
-            ]
+            let labels = metricLines(from: fb, response: resp)
             addLabel(to: cell, text: labels[indexPath.item], font: .systemFont(ofSize: 15, weight: .medium))
             return cell
 
@@ -511,17 +602,10 @@ extension FeedbackCollectionViewController: UICollectionViewDataSource {
         case .coaching:
             let cell = cv.dequeueReusableCell(withReuseIdentifier: coachingCellId, for: indexPath)
             makeCard(cell)
-            let suggestions = coachingSuggestions(from: resp, feedback: fb)
-            if indexPath.item == 0 {
-                // Primary issue header
-                let issue = coachingFocus(from: resp, feedback: fb)
-                addLabel(to: cell, text: "🎯 Focus: \(issue)", font: .systemFont(ofSize: 16, weight: .semibold), color: AppColors.primary)
-            } else {
-                // Suggestion
-                let idx = indexPath.item - 1
-                let text = idx < suggestions.count ? "💡 \(suggestions[idx])" : ""
-                addLabel(to: cell, text: text, font: .systemFont(ofSize: 14))
-            }
+            let issue = coachingFocus(from: resp, feedback: fb)
+            let strengths = resp.coaching.strengths.prefix(2).joined(separator: " ")
+            let text = "🎯 Main focus\n\(issue)\n\n✅ What went well\n\(strengths)"
+            addLabel(to: cell, text: text, font: .systemFont(ofSize: 15, weight: .semibold), color: AppColors.primary)
             return cell
 
         // --- Transcript ---
@@ -529,13 +613,29 @@ extension FeedbackCollectionViewController: UICollectionViewDataSource {
             let cell = cv.dequeueReusableCell(withReuseIdentifier: coachingCellId, for: indexPath)
             makeCard(cell)
             if indexPath.item == 0 {
-                addAttributedLabel(to: cell, attributedText: highlightedTranscript(from: resp))
+                let head = NSMutableAttributedString(
+                    string: "Marked Transcript\n\n",
+                    attributes: [
+                        .font: UIFont.preferredFont(forTextStyle: .headline),
+                        .foregroundColor: AppColors.textPrimary,
+                    ]
+                )
+                head.append(highlightedTranscript(from: resp))
+                addAttributedLabel(to: cell, attributedText: head)
+            } else if indexPath.item == 1 {
+                let legend = transcriptLegendEntries(from: resp).joined(separator: "\n")
+                addLabel(
+                    to: cell,
+                    text: "Legend\n\n\(legend)",
+                    font: .preferredFont(forTextStyle: .footnote),
+                    color: .secondaryLabel
+                )
             } else {
                 addLabel(
                     to: cell,
-                    text: transcriptSummary(from: resp) ?? "No filler words or long pauses detected.",
-                    font: .systemFont(ofSize: 14),
-                    color: .secondaryLabel
+                    text: "Mistake Totals\n\n\(transcriptMistakeTotals(from: resp))",
+                    font: .preferredFont(forTextStyle: .subheadline),
+                    color: AppColors.textPrimary
                 )
             }
             return cell
@@ -550,7 +650,13 @@ extension FeedbackCollectionViewController: UICollectionViewDataSource {
             if let f = prog.deltas.fillersDescription   { parts.append(f) }
             let arrow = prog.directionArrow
             let summary = parts.isEmpty ? "First session — baseline set!" : parts.joined(separator: "\n")
-            addLabel(to: cell, text: "\(arrow) \(prog.weeklySummary)\n\n\(summary)", font: .systemFont(ofSize: 14))
+
+            var tradeoff = ""
+            if prog.deltas.wpm > 0, prog.deltas.fillers < 0 {
+                tradeoff = "\n\nTradeoff: pace improved, but filler rate increased."
+            }
+
+            addLabel(to: cell, text: "\(arrow) \(prog.weeklySummary)\n\n\(summary)\(tradeoff)", font: .systemFont(ofSize: 14))
             return cell
 
         default:
@@ -572,8 +678,8 @@ extension FeedbackCollectionViewController: UICollectionViewDataSource {
 
         let mapped = FeedbackSection(rawValue: indexPath.section + 1) ?? .scores
         let titles: [FeedbackSection: String] = [
-            .scores: "Scores", .metrics: "Metrics", .coaching: "Coaching",
-            .transcript: "Transcript",
+            .scores: "Performance Snapshot", .metrics: "Speaking Signals", .coaching: "Action Plan",
+            .transcript: "Marked Transcript",
             .progress: "Your Progress",
         ]
 

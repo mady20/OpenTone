@@ -143,6 +143,34 @@ final class GeminiService {
         currentModelIndex = 0
     }
 
+    /// Start an AI Call session with scenario-aware opening text.
+    /// This resets Gemini conversational state for the call.
+    func startAICallSession(scenario: String, difficulty: String) async throws -> String {
+        resetConversation()
+
+        let bootstrap = """
+        Start a live English speaking call practice session.
+        Scenario: \(scenario).
+        Difficulty: \(difficulty).
+        Reply with a short opening in 1-2 sentences and ask one follow-up question.
+        """
+
+        return try await sendMessage(bootstrap)
+    }
+
+    /// Generate one conversational turn response for AI Call using the active Gemini history.
+    func generateAICallTurnResponse(userText: String, scenario: String, difficulty: String) async throws -> String {
+        let prompt = """
+        Scenario context: \(scenario).
+        Difficulty level: \(difficulty).
+        User said: \(userText)
+
+        Reply in 1-2 short spoken-friendly sentences. Be encouraging and natural.
+        """
+
+        return try await sendMessage(prompt)
+    }
+
     /// Generate conversation starter questions based on peer interests.
     /// This is a one-shot call — does NOT affect conversation history.
     func generateQuestions(for interests: [String], peerName: String) async throws -> [String] {

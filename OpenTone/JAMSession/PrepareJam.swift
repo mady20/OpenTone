@@ -25,7 +25,7 @@ final class PrepareJamViewController: UIViewController {
             timerCell.pauseTimer()
         }
 
-        // Show a loading indicator on the button while waiting for the LLM
+        // Show a loading indicator while generating a new local topic
         closeButton.configuration?.image = UIImage(systemName: "ellipsis.circle")
         closeButton.isEnabled = false
 

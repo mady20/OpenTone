@@ -383,8 +383,8 @@ extension StartJamViewController: TimerManagerDelegate {
         guard !didFinishSpeech else { return }
         didFinishSpeech = true
 
-        // Note: The feedback screen uploads the audio file to Whisper via /analyze/audio
-        // to get the transcript, metrics, and coaching.
+        // Feedback screen uses local audio + on-device transcription and
+        // the shared feedback engine (on-device core, optional enhancement).
         stopRecording()
         stopPulseAnimation()
 
@@ -409,6 +409,8 @@ extension StartJamViewController: TimerManagerDelegate {
         vc.speakingDuration = speakingDuration
         vc.sessionId        = session.id.uuidString
         vc.userId           = UserDataModel.shared.getCurrentUser()?.id.uuidString ?? "demo"
+        vc.sessionMode      = .jam
+        vc.activityType     = .jam
         
         // Pass the raw local audio file to the feedback screen to unlock Whisper timestamps
         if let localURL = AudioManager.shared.lastRecordingURL {

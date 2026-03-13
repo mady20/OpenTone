@@ -1,0 +1,54 @@
+import Foundation
+
+enum FeedbackMapper {
+
+    static func toFeedback(_ response: SpeechAnalysisResponse) -> Feedback {
+        UserDefaults.standard.set(response.progress.deltas.wpm, forKey: "opentone.lastWpmDelta")
+
+        let mistakes: [SpeechMistake] = response.coaching.suggestions.prefix(5).map { suggestion in
+            SpeechMistake(
+                original: response.coaching.primaryIssueTitle,
+                correction: suggestion,
+                explanation: response.coaching.strengths.first ?? ""
+            )
+        }
+
+        return Feedback(
+            comments: response.coaching.strengths.first ?? "Keep practicing.",
+            rating: rating(fluency: response.coaching.scores.fluency),
+            wordsPerMinute: response.metrics.wpm,
+            durationInSeconds: response.metrics.durationS,
+            totalWords: response.metrics.totalWords,
+            transcript: response.transcript,
+            fillerWordCount: response.metrics.fillers,
+            pauseCount: response.metrics.pauses,
+            mistakes: mistakes,
+            aiFeedbackSummary: response.progress.weeklySummary,
+            coaching: response.coaching,
+            progress: response.progress
+        )
+    }
+
+    static func toSessionFeedback(_ response: SpeechAnalysisResponse, sessionId: UUID) -> SessionFeedback {
+        SessionFeedback(
+            id: UUID().uuidString,
+            sessionId: sessionId,
+            fillerWordCount: response.metrics.fillers,
+            mispronouncedWords: [],
+            fluencyScore: response.coaching.scores.fluency,
+            onTopicScore: response.coaching.scores.clarity,
+            pauses: response.metrics.pauses,
+            summary: response.progress.weeklySummary,
+            createdAt: Date()
+        )
+    }
+
+    private static func rating(fluency: Double) -> SessionFeedbackRating {
+        switch fluency {
+        case 85...: return .excellent
+        case 65...: return .good
+        case 45...: return .average
+        default: return .poor
+        }
+    }
+}

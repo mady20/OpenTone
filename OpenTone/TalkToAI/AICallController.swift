@@ -113,6 +113,9 @@ final class AICallController: UIViewController {
     private var sessionTurnSummaries: [SessionTurnSummary] = []
     private var userTranscriptParts: [String] = []
     private var hasStartedConversation = false
+    private let aiCallScenario = "Open Conversation"
+    private let aiCallDifficulty = "medium"
+    private let aiCallOrchestrator = AICallProviderFactory.makeOrchestrator()
 
     /// Conversation history sent to Ollama (/chat endpoint treats text turns).
     /// Each entry: ["role": "user"|"assistant", "content": "…"]
@@ -417,16 +420,19 @@ final class AICallController: UIViewController {
 
         Task { [weak self] in
             guard let self, !self.isClosing else { return }
+            let userId = UserDataModel.shared.getCurrentUser()?.id.uuidString ?? "demo"
             do {
-                let response = try await BackendSpeechService.shared.startChat(
-                    mode: "call",
-                    scenario: "Open Conversation",
-                    difficulty: "medium"
+                let startResult = try await self.aiCallOrchestrator.startSession(
+                    input: AICallStartInput(
+                        userId: userId,
+                        scenario: self.aiCallScenario,
+                        difficulty: self.aiCallDifficulty
+                    )
                 )
 
                 await MainActor.run { [weak self] in
                     guard let self, !self.isClosing else { return }
-                    let aiText = response.message.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let aiText = startResult.assistantText.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !aiText.isEmpty {
                         self.conversationHistory.append(["role": "assistant", "content": aiText])
                         self.addBubble(ChatBubble(sender: .ai, text: aiText))
@@ -442,7 +448,7 @@ final class AICallController: UIViewController {
             } catch {
                 await MainActor.run { [weak self] in
                     guard let self, !self.isClosing else { return }
-                    let fallback = "Hi! I'm ready to chat with you. How has your day been so far?"
+                    let fallback = "Gemini is unavailable right now. Please add or verify your Gemini API key in Settings, then try again."
                     self.conversationHistory.append(["role": "assistant", "content": fallback])
                     self.addBubble(ChatBubble(sender: .ai, text: fallback))
 
@@ -490,44 +496,35 @@ final class AICallController: UIViewController {
             
             do {
                 let userId = UserDataModel.shared.getCurrentUser()?.id.uuidString ?? "demo"
-                let durationS = 5.0 // Fallback estimate, ideally pass real duration
-                let response = try await BackendSpeechService.shared.analyzeChat(
-                    transcript: transcript,
-                    durationS: durationS,
-                    userId: userId,
-                    mode: "call",
-                    scenario: "Open Conversation",
-                    difficulty: "medium",
-                    conversationHistory: self.conversationHistory
+                let durationS = 5.0
+                let result = try await self.aiCallOrchestrator.generateTurn(
+                    input: AICallTurnInput(
+                        userId: userId,
+                        transcript: transcript,
+                        durationS: durationS,
+                        scenario: self.aiCallScenario,
+                        difficulty: self.aiCallDifficulty,
+                        conversationHistory: self.conversationHistory
+                    )
                 )
 
                 await MainActor.run { [weak self] in
                     guard let self, !self.isClosing else { return }
-                    let userText = response.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let userText = result.userTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !userText.isEmpty {
                         self.addBubble(ChatBubble(sender: .user, text: userText))
                         self.conversationHistory.append(["role": "user", "content": userText])
                         self.userTranscriptParts.append(userText)
-                        self.sessionTurnSummaries.append(
-                            SessionTurnSummary(
-                                transcript: userText,
-                                totalWords: response.metrics.totalWords,
-                                durationS: response.metrics.durationS,
-                                fillers: response.metrics.fillers,
-                                pauses: response.metrics.pauses,
-                                avgPauseS: response.metrics.avgPauseS,
-                                veryLongPauses: response.metrics.veryLongPauses,
-                                repetitions: response.metrics.repetitions,
-                                fillerExamples: response.metrics.fillerExamples,
-                                pauseExamples: response.metrics.pauseExamples
-                            )
-                        )
+                        self.sessionTurnSummaries.append(self.buildTurnSummary(
+                            transcript: userText,
+                            durationS: durationS,
+                            metrics: result.metrics
+                        ))
                     }
-                    
-                    // Use the LLM's conversational reply; fall back to coaching only if empty
-                    let aiText = response.llmReply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        ? (response.coaching.llmCoaching?.improvedSentence ?? "Could you say that again?")
-                        : response.llmReply
+
+                    let aiText = result.assistantText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? "Could you say that again?"
+                        : result.assistantText
                     self.conversationHistory.append(["role": "assistant", "content": aiText])
                     self.addBubble(ChatBubble(sender: .ai, text: aiText))
                     
@@ -598,43 +595,35 @@ final class AICallController: UIViewController {
             do {
                 let userId = UserDataModel.shared.getCurrentUser()?.id.uuidString ?? "demo"
                 let durationS = 5.0
-                let response = try await BackendSpeechService.shared.analyzeChat(
-                    transcript: transcript,
-                    durationS: durationS,
-                    userId: userId,
-                    mode: "call",
-                    scenario: "Open Conversation",
-                    difficulty: "medium",
-                    conversationHistory: self.conversationHistory
+                let result = try await self.aiCallOrchestrator.generateTurn(
+                    input: AICallTurnInput(
+                        userId: userId,
+                        transcript: transcript,
+                        durationS: durationS,
+                        scenario: self.aiCallScenario,
+                        difficulty: self.aiCallDifficulty,
+                        conversationHistory: self.conversationHistory
+                    )
                 )
 
                 await MainActor.run { [weak self] in
                     guard let self, !self.isClosing else { return }
                     self.isRetrying = false
-                    let userText = response.transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let userText = result.userTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
                     if !userText.isEmpty {
                         self.addBubble(ChatBubble(sender: .user, text: userText))
                         self.conversationHistory.append(["role": "user", "content": userText])
                         self.userTranscriptParts.append(userText)
-                        self.sessionTurnSummaries.append(
-                            SessionTurnSummary(
-                                transcript: userText,
-                                totalWords: response.metrics.totalWords,
-                                durationS: response.metrics.durationS,
-                                fillers: response.metrics.fillers,
-                                pauses: response.metrics.pauses,
-                                avgPauseS: response.metrics.avgPauseS,
-                                veryLongPauses: response.metrics.veryLongPauses,
-                                repetitions: response.metrics.repetitions,
-                                fillerExamples: response.metrics.fillerExamples,
-                                pauseExamples: response.metrics.pauseExamples
-                            )
-                        )
+                        self.sessionTurnSummaries.append(self.buildTurnSummary(
+                            transcript: userText,
+                            durationS: durationS,
+                            metrics: result.metrics
+                        ))
                     }
 
-                    let aiText = response.llmReply.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                        ? (response.coaching.llmCoaching?.improvedSentence ?? "Could you say that again?")
-                        : response.llmReply
+                    let aiText = result.assistantText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        ? "Could you say that again?"
+                        : result.assistantText
                     self.conversationHistory.append(["role": "assistant", "content": aiText])
                     self.addBubble(ChatBubble(sender: .ai, text: aiText))
 
@@ -682,6 +671,50 @@ final class AICallController: UIViewController {
                 }
             }
         }
+    }
+
+    private func buildTurnSummary(transcript: String, durationS: Double, metrics: SpeechMetrics?) -> SessionTurnSummary {
+        if let metrics {
+            return SessionTurnSummary(
+                transcript: transcript,
+                totalWords: metrics.totalWords,
+                durationS: metrics.durationS,
+                fillers: metrics.fillers,
+                pauses: metrics.pauses,
+                avgPauseS: metrics.avgPauseS,
+                veryLongPauses: metrics.veryLongPauses,
+                repetitions: metrics.repetitions,
+                fillerExamples: metrics.fillerExamples,
+                pauseExamples: metrics.pauseExamples
+            )
+        }
+
+        let words = transcript
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+
+        let fillerLexicon: Set<String> = ["um", "uh", "like", "actually", "basically"]
+        let fillerCount = words.filter { fillerLexicon.contains($0) }.count
+        let repetitions = zip(words, words.dropFirst()).reduce(0) { $1.0 == $1.1 ? $0 + 1 : $0 }
+
+        let punctuationPauses = transcript.filter { ",.;?!".contains($0) }.count
+        let inferredPauses = min(max(0, punctuationPauses / 2), max(words.count / 3, 0))
+        let avgPauseS = inferredPauses > 0 ? max(0.6, (durationS * 0.15) / Double(inferredPauses)) : 0
+        let veryLongPauses = avgPauseS > 1.5 ? min(inferredPauses, 1) : 0
+
+        return SessionTurnSummary(
+            transcript: transcript,
+            totalWords: words.count,
+            durationS: durationS,
+            fillers: fillerCount,
+            pauses: inferredPauses,
+            avgPauseS: avgPauseS,
+            veryLongPauses: veryLongPauses,
+            repetitions: repetitions,
+            fillerExamples: [],
+            pauseExamples: []
+        )
     }
 
     // MARK: - Button Actions
@@ -775,122 +808,64 @@ final class AICallController: UIViewController {
             return
         }
 
-        // Get last audio data for session analysis
-        let lastAudioData: Data? = {
-            guard let url = AudioManager.shared.lastRecordingURL else { return nil }
-            return try? Data(contentsOf: url)
-        }()
-
         let sessionId = UUID().uuidString
         conversationHistory.removeAll()
         userTranscriptParts.removeAll()
 
-        // Call the end-session endpoint for comprehensive feedback
+        // Analyze feedback locally and optionally enhance wording with remote providers.
         currentState = .processing
         Task {
-            do {
-                let response = try await BackendSpeechService.shared.endSession(
-                    lastAudioData: lastAudioData,
-                    fullTranscript: fullTranscript,
-                    totalDurationS: duration,
+            let engine = FeedbackEngineFactory.makeDefault()
+            let response = await engine.analyze(
+                FeedbackEngineInput(
+                    transcript: fullTranscript,
+                    topic: "Open Conversation",
+                    durationS: duration,
                     userId: userId.uuidString,
                     sessionId: sessionId,
-                    turnSummaries: turnSummaries,
-                    mode: "call"
+                    mode: .aiCall,
+                    turnSummaries: turnSummaries
+                )
+            )
+
+            let sessionFeedback = FeedbackMapper.toSessionFeedback(
+                response,
+                sessionId: UUID(uuidString: sessionId) ?? UUID()
+            )
+
+            await MainActor.run {
+                self.loadingIndicator.stopAnimating()
+                self.loadingOverlay.isHidden = true
+
+                HistoryDataModel.shared.logActivity(
+                    type: .aiCall,
+                    title: "AI Call",
+                    topic: "Open Conversation",
+                    duration: max(1, Int(duration) / 60),
+                    imageURL: "Call",
+                    xpEarned: 10,
+                    isCompleted: true,
+                    feedback: sessionFeedback
                 )
 
-                // Create SessionFeedback and log to history
-                let sessionFeedback = BackendSpeechService.toSessionFeedback(
-                    response,
-                    sessionId: UUID(uuidString: sessionId) ?? UUID()
-                )
+                let feedbackVC = FeedbackCollectionViewController()
+                feedbackVC.transcript = fullTranscript
+                feedbackVC.topic = "AI Call"
+                feedbackVC.speakingDuration = duration
+                feedbackVC.sessionId = sessionId
+                feedbackVC.userId = userId.uuidString
+                feedbackVC.sessionMode = .aiCall
+                feedbackVC.activityType = .aiCall
+                feedbackVC.preloadedResponse = response
 
-                await MainActor.run {
-                    HistoryDataModel.shared.logActivity(
-                        type: .aiCall,
-                        title: "AI Call",
-                        topic: "Open Conversation",
-                        duration: max(1, Int(duration) / 60),
-                        imageURL: "Call",
-                        xpEarned: 10,
-                        isCompleted: true,
-                        feedback: sessionFeedback
-                    )
-
-                    // Present feedback screen
-                    let feedbackVC = FeedbackCollectionViewController()
-                    feedbackVC.transcript = fullTranscript
-                    feedbackVC.topic = "AI Call"
-                    feedbackVC.speakingDuration = duration
-                    feedbackVC.sessionId = sessionId
-                    feedbackVC.userId = userId.uuidString
-
-                    // Inject the pre-fetched response so FeedbackVC doesn't re-fetch
-                    feedbackVC.preloadedResponse = response
-
-                    let nav = UINavigationController(rootViewController: feedbackVC)
-                    nav.modalPresentationStyle = .fullScreen
-                    // Present feedback from the presenting VC so dismissing it
-                    // doesn't land the user back on the dead call screen.
-                    if let presenter = self.presentingViewController {
-                        self.dismiss(animated: false) {
-                            presenter.present(nav, animated: true)
-                        }
-                    } else {
-                        self.present(nav, animated: true)
+                let nav = UINavigationController(rootViewController: feedbackVC)
+                nav.modalPresentationStyle = .fullScreen
+                if let presenter = self.presentingViewController {
+                    self.dismiss(animated: false) {
+                        presenter.present(nav, animated: true)
                     }
-                }
-
-            } catch {
-                print("❌ End-session feedback failed: \(error.localizedDescription)")
-                await MainActor.run {
-                    // Hide loading overlay
-                    self.loadingIndicator.stopAnimating()
-                    self.loadingOverlay.isHidden = true
-                    
-                    // Build fallback feedback from locally-collected turn summaries
-                    let fallbackFeedback = self.buildLocalFallbackFeedback(
-                        turnSummaries: turnSummaries,
-                        fullTranscript: fullTranscript,
-                        duration: duration,
-                        sessionId: sessionId
-                    )
-
-                    HistoryDataModel.shared.logActivity(
-                        type: .aiCall,
-                        title: "AI Call",
-                        topic: "Open Conversation",
-                        duration: max(1, Int(duration) / 60),
-                        imageURL: "Call",
-                        xpEarned: 10,
-                        isCompleted: true,
-                        feedback: fallbackFeedback
-                    )
-
-                    // Still show the feedback screen with locally-computed data
-                    let fallbackResponse = self.buildLocalFallbackResponse(
-                        turnSummaries: turnSummaries,
-                        fullTranscript: fullTranscript,
-                        duration: duration
-                    )
-
-                    let feedbackVC = FeedbackCollectionViewController()
-                    feedbackVC.transcript = fullTranscript
-                    feedbackVC.topic = "AI Call"
-                    feedbackVC.speakingDuration = duration
-                    feedbackVC.sessionId = sessionId
-                    feedbackVC.userId = userId.uuidString
-                    feedbackVC.preloadedResponse = fallbackResponse
-
-                    let nav = UINavigationController(rootViewController: feedbackVC)
-                    nav.modalPresentationStyle = .fullScreen
-                    if let presenter = self.presentingViewController {
-                        self.dismiss(animated: false) {
-                            presenter.present(nav, animated: true)
-                        }
-                    } else {
-                        self.present(nav, animated: true)
-                    }
+                } else {
+                    self.present(nav, animated: true)
                 }
             }
         }

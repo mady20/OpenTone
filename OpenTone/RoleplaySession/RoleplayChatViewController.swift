@@ -1,6 +1,12 @@
 import UIKit
 import AVFoundation
 
+private final class RoleplayDisplayLinkProxy {
+    weak var target: RoleplayChatViewController?
+    init(target: RoleplayChatViewController) { self.target = target }
+    @objc func step(_ link: CADisplayLink) { target?.updateAnimation() }
+}
+
 enum ChatSender {
     case app
     case user
@@ -49,6 +55,33 @@ class RoleplayChatViewController: UIViewController {
     private var isMuted = false
     private var isSpeaking = false
 
+    private enum State {
+        case idle
+        case listening
+        case processing
+        case speaking
+    }
+
+    private var currentState: State = .idle {
+        didSet { updateStatusLabel() }
+    }
+
+    private let statusLabel: UILabel = {
+        let label = UILabel()
+        label.font = .systemFont(ofSize: 14, weight: .medium)
+        label.textColor = .secondaryLabel
+        label.textAlignment = .center
+        label.adjustsFontForContentSizeCategory = true
+        label.translatesAutoresizingMaskIntoConstraints = false
+        return label
+    }()
+
+    private var displayLink: CADisplayLink?
+    private var displayLinkProxy: RoleplayDisplayLinkProxy?
+    private let waveLayers: [CAShapeLayer] = (0..<5).map { _ in CAShapeLayer() }
+    private var smoothedLevel: CGFloat = 0.1
+    private let smoothingFactor: CGFloat = 0.15
+
     // MARK: - Scripted roleplay (primary mode)
     // Ollama-powered roleplay remains available as a fallback path.
 
@@ -75,10 +108,19 @@ class RoleplayChatViewController: UIViewController {
         setupUI()
         setupTableView()
         setupButtons()
+        setupWave()
+        startDisplayLink()
+
+        view.addSubview(statusLabel)
+        NSLayoutConstraint.activate([
+            statusLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            statusLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
+        ])
+        tableView.contentInset.top = 40
+        currentState = .idle
 
         AudioManager.shared.onFinalTranscription = { [weak self] text in
-            print("🎤 USER SAID:", text)
-            self?.userResponded(text)
+            self?.handleUserTranscription(text)
         }
 
         AudioManager.shared.onRecordingStateChanged = { [weak self] isRecording in
@@ -86,12 +128,25 @@ class RoleplayChatViewController: UIViewController {
                 self?.updateMicUI(isRecording: isRecording)
             }
         }
+
+        AudioManager.shared.onAudioBuffer = { [weak self] buffer in
+            self?.processAudio(buffer)
+        }
     }
     
     private func setupUI() {
         view.backgroundColor = AppColors.screenBackground
         navigationItem.hidesBackButton = true
         navigationItem.rightBarButtonItem = nil
+    }
+
+    private func updateStatusLabel() {
+        switch currentState {
+        case .idle:       statusLabel.text = "Hold mic to speak"
+        case .listening:  statusLabel.text = "Listening…"
+        case .processing: statusLabel.text = "Processing…"
+        case .speaking:   statusLabel.text = "Speaking…"
+        }
     }
     
     private func setupTableView() {
@@ -106,6 +161,10 @@ class RoleplayChatViewController: UIViewController {
     private func setupButtons() {
         // Mic button
         UIHelper.styleCircularIconButton(micButton, symbol: "mic.fill")
+
+        let longPress = UILongPressGestureRecognizer(target: self, action: #selector(handleRecordLongPress(_:)))
+        longPress.minimumPressDuration = 0.0
+        micButton.addGestureRecognizer(longPress)
 
         // Replay button — repurpose as mute toggle
         UIHelper.styleCircularIconButton(replayButton, symbol: "speaker.wave.2.fill")
@@ -123,8 +182,150 @@ class RoleplayChatViewController: UIViewController {
         }
     }
 
+    private func setupWave() {
+        for (i, layer) in waveLayers.enumerated() {
+            layer.fillColor = UIColor.clear.cgColor
+            layer.strokeColor = AppColors.primary.withAlphaComponent(1.0 - CGFloat(i) * 0.1).cgColor
+            layer.lineWidth = 6
+            layer.lineCap = .round
+            layer.opacity = 0
+            view.layer.addSublayer(layer)
+        }
+    }
+
+    private func updateWave() {
+        let centerY = micButton.frame.minY - 24
+        let centerX = view.bounds.midX
+        let totalWidth: CGFloat = 160
+        let spacing = totalWidth / CGFloat(waveLayers.count + 1)
+
+        for (i, layer) in waveLayers.enumerated() {
+            let xPos = centerX - (totalWidth / 2) + spacing * CGFloat(i + 1)
+            let path = UIBezierPath()
+            path.move(to: CGPoint(x: xPos, y: centerY))
+            path.addLine(to: CGPoint(x: xPos, y: centerY))
+            layer.path = path.cgPath
+        }
+    }
+
+    private func startDisplayLink() {
+        let proxy = RoleplayDisplayLinkProxy(target: self)
+        displayLinkProxy = proxy
+        displayLink = CADisplayLink(target: proxy, selector: #selector(RoleplayDisplayLinkProxy.step(_:)))
+        displayLink?.add(to: .main, forMode: .common)
+    }
+
+    @objc func updateAnimation() {
+        let targetExpansion: CGFloat
+        var shouldShowWave = false
+
+        switch currentState {
+        case .listening:
+            targetExpansion = smoothedLevel * 60
+            shouldShowWave = true
+        case .speaking:
+            let t = CACurrentMediaTime()
+            targetExpansion = CGFloat(sin(t * 6.0) * 0.5 + 0.5) * 40
+            shouldShowWave = true
+        case .processing:
+            let t = CACurrentMediaTime()
+            targetExpansion = CGFloat(sin(t * 2.0) * 0.5 + 0.5) * 20
+            shouldShowWave = true
+        case .idle:
+            targetExpansion = 2
+            shouldShowWave = false
+        }
+
+        let targetOpacity: Float = shouldShowWave ? 1.0 : 0.0
+        let centerY = micButton.frame.minY - 32
+        let centerX = view.bounds.midX
+        let totalWidth: CGFloat = 160
+        let spacing = totalWidth / CGFloat(waveLayers.count + 1)
+
+        for (i, layer) in waveLayers.enumerated() {
+            layer.opacity += (targetOpacity - layer.opacity) * 0.15
+
+            let xPos = centerX - (totalWidth / 2) + spacing * CGFloat(i + 1)
+            let variation = CGFloat(sin(CACurrentMediaTime() * Double(4 + i) + Double(i)))
+            var barHeight = max(4, targetExpansion * (0.5 + abs(variation) * 0.5))
+            let centerDist = abs(CGFloat(i) - CGFloat(waveLayers.count - 1) / 2.0)
+            barHeight *= max(0.2, 1.0 - (centerDist * 0.3))
+
+            let path = UIBezierPath()
+            path.move(to: CGPoint(x: xPos, y: centerY - barHeight / 2))
+            path.addLine(to: CGPoint(x: xPos, y: centerY + barHeight / 2))
+            layer.path = path.cgPath
+        }
+    }
+
+    private func processAudio(_ buffer: AVAudioPCMBuffer) {
+        guard !isMuted, currentState == .listening, let data = buffer.floatChannelData?[0] else { return }
+        let count = Int(buffer.frameLength)
+
+        var sum: Float = 0
+        for i in 0..<count { sum += data[i] * data[i] }
+
+        let rms = sqrt(sum / Float(count))
+        let db = 20 * log10(max(rms, 0.000_001))
+        let normalized = max(0, min(1, (db + 50) / 50))
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.smoothedLevel += (CGFloat(normalized) - self.smoothedLevel) * self.smoothingFactor
+        }
+    }
+
+    @objc private func handleRecordLongPress(_ gesture: UILongPressGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            if currentState == .speaking {
+                OnDeviceTTSService.shared.stopPlaying()
+                isSpeaking = false
+            }
+            UIView.animate(withDuration: 0.2) {
+                self.micButton.transform = CGAffineTransform(scaleX: 1.2, y: 1.2)
+                self.micButton.alpha = 0.8
+            }
+            startListening()
+        case .ended, .cancelled, .failed:
+            UIView.animate(withDuration: 0.2) {
+                self.micButton.transform = .identity
+                self.micButton.alpha = 1.0
+            }
+            stopListeningAndProcess()
+        default:
+            break
+        }
+    }
+
+    private func startListening() {
+        guard !isProcessingResponse else { return }
+        guard !AudioManager.shared.isRecording else { return }
+        currentState = .listening
+        AudioManager.shared.startRecording()
+    }
+
+    private func stopListeningAndProcess() {
+        guard AudioManager.shared.isRecording else { return }
+        currentState = .processing
+        AudioManager.shared.stopRecording()
+    }
+
+    private func handleUserTranscription(_ text: String) {
+        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleaned.isEmpty {
+            currentState = .idle
+            isProcessingResponse = false
+            return
+        }
+
+        print("🎤 USER SAID:", cleaned)
+        userResponded(cleaned)
+    }
+
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
+        updateWave()
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -146,13 +347,26 @@ class RoleplayChatViewController: UIViewController {
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
 
+        displayLink?.invalidate()
+        displayLink = nil
+
         OnDeviceTTSService.shared.stopPlaying()
 
         if AudioManager.shared.isRecording {
-            AudioManager.shared.stopRecording()
+            AudioManager.shared.stopRecording(autoTranscribe: false)
         }
 
+        AudioManager.shared.onAudioBuffer = nil
+        AudioManager.shared.onFinalTranscription = nil
+        AudioManager.shared.onRecordingStateChanged = nil
+
+        currentState = .idle
+
         tabBarController?.tabBar.isHidden = false
+    }
+
+    deinit {
+        displayLink?.invalidate()
     }
 
     // MARK: - Gemini-powered Roleplay
@@ -330,6 +544,7 @@ class RoleplayChatViewController: UIViewController {
         guard !isMuted else { return }
         guard !isSpeaking else { return }  // prevent overlapping audio
         isSpeaking = true
+        currentState = .speaking
 
         // Stop any ongoing recording WITHOUT auto-transcribe to prevent
         // the callback → userResponded → advanceSession → speakText loop
@@ -343,6 +558,7 @@ class RoleplayChatViewController: UIViewController {
 
                 await MainActor.run {
                     self.isSpeaking = false
+                    self.currentState = .idle
                     // Keep playAndRecord so both mic recording and future TTS work without session conflicts
                     let session = AVAudioSession.sharedInstance()
                     try? session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker])
@@ -350,7 +566,10 @@ class RoleplayChatViewController: UIViewController {
                 }
             } catch {
                 print("Roleplay TTS Error: \(error)")
-                await MainActor.run { self.isSpeaking = false }
+                await MainActor.run {
+                    self.isSpeaking = false
+                    self.currentState = .idle
+                }
             }
         }
     }
@@ -369,6 +588,7 @@ class RoleplayChatViewController: UIViewController {
         if isMuted {
             OnDeviceTTSService.shared.stopPlaying()
             isSpeaking = false
+            currentState = .idle
             if AudioManager.shared.isRecording {
                 AudioManager.shared.stopRecording()
             }
@@ -378,24 +598,16 @@ class RoleplayChatViewController: UIViewController {
     // MARK: - Mic UI
     
     private func updateMicUI(isRecording: Bool) {
-        micButton.backgroundColor = isRecording
-            ? UIColor.systemRed
-            : AppColors.cardBackground
+        if isRecording {
+            micButton.tintColor = .white
+            micButton.backgroundColor = .systemRed
+        } else {
+            UIHelper.updateCircularIconButton(micButton)
+        }
     }
 
     @IBAction func micTapped(_ sender: UIButton) {
-
-        // Stop TTS if playing so user can speak
-        if isSpeaking {
-            OnDeviceTTSService.shared.stopPlaying()
-            isSpeaking = false
-        }
-
-        if AudioManager.shared.isRecording {
-            AudioManager.shared.stopRecording()
-        } else {
-            AudioManager.shared.startRecording()
-        }
+        // Push-to-talk is handled through long-press gesture.
     }
 
 
@@ -422,6 +634,7 @@ class RoleplayChatViewController: UIViewController {
 
         guard !isProcessingResponse else { return }
         isProcessingResponse = true
+        currentState = .processing
 
         // Remove suggestions
         if messages.last?.sender == .suggestions {
@@ -437,6 +650,8 @@ class RoleplayChatViewController: UIViewController {
 
         if isScriptedMode {
             handleScriptedResponse(text)
+        } else {
+            handleGeminiUserResponse(text)
         }
     }
 
@@ -458,6 +673,7 @@ class RoleplayChatViewController: UIViewController {
                     session.currentLineIndex += 1
                     handleGeminiResponse(reply)
                     isProcessingResponse = false
+                    currentState = .idle
 
                     // Check if we should end after enough turns
                     if geminiTurnCount >= scenario.script.count {
@@ -476,6 +692,7 @@ class RoleplayChatViewController: UIViewController {
                     ))
                     reloadTableSafely()
                     isProcessingResponse = false
+                    currentState = .idle
                 }
             }
         }
@@ -526,6 +743,7 @@ class RoleplayChatViewController: UIViewController {
         } else {
             handleWrongAttempt(expected: expected)
             isProcessingResponse = false
+            currentState = .idle
         }
     }
 
@@ -536,6 +754,7 @@ class RoleplayChatViewController: UIViewController {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
                 self.loadCurrentStep()
                 self.isProcessingResponse = false
+                self.currentState = .idle
             }
         } else {
             session.status = .completed
@@ -607,6 +826,7 @@ class RoleplayChatViewController: UIViewController {
     private func showExitAlert() {
         OnDeviceTTSService.shared.stopPlaying()
         isSpeaking = false
+        currentState = .idle
 
         if AudioManager.shared.isRecording {
             AudioManager.shared.stopRecording()
@@ -683,39 +903,34 @@ class RoleplayChatViewController: UIViewController {
         }()
 
         Task {
-            do {
-                let response = try await BackendSpeechService.shared.endSession(
-                    lastAudioData: lastAudioData,
-                    fullTranscript: userTranscript,
-                    totalDurationS: durationSeconds,
+            let _ = lastAudioData
+            let engine = FeedbackEngineFactory.makeDefault()
+            let response = await engine.analyze(
+                FeedbackEngineInput(
+                    transcript: userTranscript,
+                    topic: scenario.title,
+                    durationS: durationSeconds,
                     userId: userId,
                     sessionId: sessionId,
-                    turnSummaries: [],
-                    mode: "roleplay"
+                    mode: .roleplay,
+                    turnSummaries: []
                 )
+            )
 
-                await MainActor.run {
-                    // Present feedback VC instead of simple score screen
-                    let feedbackVC = FeedbackCollectionViewController()
-                    feedbackVC.transcript = userTranscript
-                    feedbackVC.topic = scenario.title
-                    feedbackVC.speakingDuration = durationSeconds
-                    feedbackVC.sessionId = sessionId
-                    feedbackVC.userId = userId
-                    feedbackVC.preloadedResponse = response
+            await MainActor.run {
+                let feedbackVC = FeedbackCollectionViewController()
+                feedbackVC.transcript = userTranscript
+                feedbackVC.topic = scenario.title
+                feedbackVC.speakingDuration = durationSeconds
+                feedbackVC.sessionId = sessionId
+                feedbackVC.userId = userId
+                feedbackVC.sessionMode = .roleplay
+                feedbackVC.activityType = .roleplay
+                feedbackVC.preloadedResponse = response
 
-                    let nav = UINavigationController(rootViewController: feedbackVC)
-                    nav.modalPresentationStyle = .fullScreen
-                    self.present(nav, animated: true)
-                }
-            } catch {
-                print("❌ Roleplay end-session feedback failed: \(error.localizedDescription)")
-                await MainActor.run {
-                    // Fall back to basic score screen
-                    DispatchQueue.main.asyncAfter(deadline: .now() + delayBeforePresent) {
-                        self.presentScoreScreen()
-                    }
-                }
+                let nav = UINavigationController(rootViewController: feedbackVC)
+                nav.modalPresentationStyle = .fullScreen
+                self.present(nav, animated: true)
             }
         }
     }
