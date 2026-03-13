@@ -291,6 +291,15 @@ final class ProgressCell: UICollectionViewCell {
 
     private func animateRingProgress(to target: CGFloat) {
         let clampedTarget = min(max(target, 0), 1)
+
+        // On first configure, Auto Layout may not have finalized ring bounds yet.
+        // Ensure layers have a valid path before attempting animation.
+        if ringProgressLayer.path == nil {
+            setNeedsLayout()
+            layoutIfNeeded()
+            drawRing()
+        }
+
         let fromValue = ringProgressLayer.presentation()?.strokeEnd ?? ringProgressLayer.strokeEnd
 
         ringProgressLayer.removeAnimation(forKey: "progressAnimation")
@@ -379,6 +388,10 @@ final class ProgressCell: UICollectionViewCell {
     // MARK: - Configure
 
     func configure(with data: ProgressCellData) {
+        // Ensure ring container has its final bounds on first load so the path exists.
+        contentView.setNeedsLayout()
+        contentView.layoutIfNeeded()
+
         // Streak
         streakCountLabel.text = "\(data.streakDays) day streak"
 

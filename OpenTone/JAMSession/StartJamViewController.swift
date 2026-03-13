@@ -13,8 +13,8 @@ class StartJamViewController: UIViewController {
 
     @IBOutlet var micButton: UIButton!
 
-    private let timerManager = TimerManager(totalSeconds: 30)
-    private var remainingSeconds: Int = 30
+    private let timerManager = TimerManager(totalSeconds: 60)
+    private var remainingSeconds: Int = 60
     private var hintStackView: UIStackView?
     private var didFinishSpeech = false
     private var isMicOn = false
@@ -37,7 +37,7 @@ class StartJamViewController: UIViewController {
         // Load topic from active session
         if let session = JamSessionDataModel.shared.getActiveSession() {
             topicTitleLabel.text = session.topic
-            remainingSeconds = 30  // Speaking always gets full 30 seconds
+            remainingSeconds = 60  // Speaking always gets full 1 minute
         }
 
         // Mark the speaking phase in the data model
@@ -98,7 +98,7 @@ class StartJamViewController: UIViewController {
         timerRingView.resetRing()
         timerRingView.animateRing(
             remainingSeconds: remainingSeconds,
-            totalSeconds: 30
+            totalSeconds: 60
         )
         timerManager.start(from: remainingSeconds)
     }
@@ -125,7 +125,7 @@ class StartJamViewController: UIViewController {
         timerManager.pause()
         pauseRecording()
         timerRingView.resetRing()
-        timerRingView.setProgress(value: CGFloat(remainingSeconds), max: 30) // Pause visual state
+        timerRingView.setProgress(value: CGFloat(remainingSeconds), max: 60) // Pause visual state
 
         let alert = UIAlertController(
             title: "Exit Session",
@@ -138,7 +138,7 @@ class StartJamViewController: UIViewController {
             self.timerManager.start(from: self.remainingSeconds)
             self.timerRingView.animateRing(
                 remainingSeconds: self.remainingSeconds,
-                totalSeconds: 30
+                totalSeconds: 60
             )
             // Start a fresh recognition session (Apple requires new sessions)
             self.startRecording()
@@ -400,7 +400,7 @@ extension StartJamViewController: TimerManagerDelegate {
         if let start = session.startedSpeakingAt {
             speakingDuration = Date().timeIntervalSince(start)
         } else {
-            speakingDuration = 30.0
+            speakingDuration = 60.0
         }
           
         let vc = FeedbackCollectionViewController()

@@ -15,9 +15,9 @@ final class TimerCellCollectionViewCell: UICollectionViewCell {
 
     weak var delegate: TimerCellDelegate?
 
-    private let timerManager = TimerManager(totalSeconds: 30)
+    private let timerManager = TimerManager(totalSeconds: 60)
     private var didConfigure = false
-    private var currentSeconds = 30
+    private var currentSeconds = 60
 
     override func awakeFromNib() {
         super.awakeFromNib()
@@ -44,12 +44,12 @@ final class TimerCellCollectionViewCell: UICollectionViewCell {
         guard !didConfigure else { return }
         didConfigure = true
 
-        currentSeconds = reset ? 30 : secondsLeft
+        currentSeconds = reset ? 60 : secondsLeft
 
         timerRingView.resetRing()
         timerRingView.animateRing(
             remainingSeconds: currentSeconds,
-            totalSeconds: 30
+            totalSeconds: 60
         )
 
         timerManager.start(from: currentSeconds)
@@ -59,20 +59,20 @@ final class TimerCellCollectionViewCell: UICollectionViewCell {
         timerManager.pause()
         timerRingView.resetRing() // Stop the animation sweep
         // Set to current progress so it looks paused
-        timerRingView.setProgress(value: CGFloat(currentSeconds), max: 30)
+        timerRingView.setProgress(value: CGFloat(currentSeconds), max: 60)
     }
 
     func resumeTimer() {
         timerManager.start(from: currentSeconds)
         timerRingView.animateRing(
             remainingSeconds: currentSeconds,
-            totalSeconds: 30
+            totalSeconds: 60
         )
     }
 
 
     private func resetUI() {
-        timerLabel.text = "00:30"
+        timerLabel.text = "01:00"
         timerLabel.isHidden = false
     }
 }
@@ -89,7 +89,7 @@ extension TimerCellCollectionViewCell: TimerManagerDelegate {
            let m = Int(parts[0]),
            let s = Int(parts[1]) {
             currentSeconds = m * 60 + s
-            timerRingView.setProgress(value: CGFloat(currentSeconds), max: 30)
+            timerRingView.setProgress(value: CGFloat(currentSeconds), max: 60)
             delegate?.timerDidUpdate(secondsLeft: currentSeconds)
         }
     }
@@ -97,7 +97,7 @@ extension TimerCellCollectionViewCell: TimerManagerDelegate {
     func timerManagerDidFinish() {
         timerLabel.text = "00:00"
         currentSeconds = 0
-        timerRingView.setProgress(value: 0, max: 30)
+        timerRingView.setProgress(value: 0, max: 60)
         delegate?.timerDidFinish()
     }
 }

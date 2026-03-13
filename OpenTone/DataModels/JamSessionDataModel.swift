@@ -44,7 +44,7 @@ class JamSessionDataModel {
             topic: topic,
             suggestions: suggestions,
             phase: .preparing,
-            secondsLeft: 30
+            secondsLeft: 60
         )
         activeSession = session
         let captured = session
@@ -54,7 +54,7 @@ class JamSessionDataModel {
 
     func startJamSession(
         phase: JamPhase = .preparing,
-        initialSeconds: Int = 30,
+        initialSeconds: Int = 60,
         completion: @escaping (JamSession?) -> Void
     ) {
         startNewSession(completion: completion)
@@ -88,7 +88,7 @@ class JamSessionDataModel {
         guard var session = activeSession else { return }
         session.phase = .speaking
         session.startedSpeakingAt = Date()
-        session.secondsLeft = 30
+        session.secondsLeft = 60
         activeSession = session
         let captured = session
         Task { await upsertSessionInSupabase(captured) }
@@ -121,7 +121,7 @@ class JamSessionDataModel {
         let topic = generateRandomTopic(excluding: current.topic)
         current.topic = topic
         current.suggestions = generateSuggestions(for: topic)
-        current.secondsLeft = 30
+        current.secondsLeft = 60
         current.startedPrepAt = Date()
 
         activeSession = current

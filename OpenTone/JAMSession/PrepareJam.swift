@@ -60,8 +60,8 @@ final class PrepareJamViewController: UIViewController {
     private var selectedTopic: String = ""
     private var allSuggestions: [String] = []
 
-    private var remainingSeconds: Int = 30
-    private var lastKnownSeconds: Int = 30
+    private var remainingSeconds: Int = 60
+    private var lastKnownSeconds: Int = 60
 
     private var visibleCount = 4
     private var visibleSuggestions: [String] {
@@ -175,7 +175,7 @@ final class PrepareJamViewController: UIViewController {
         allSuggestions = session.suggestions
 
         if forceTimerReset {
-            remainingSeconds = 30
+            remainingSeconds = 60
             forceTimerReset = false
         } else {
             remainingSeconds = session.secondsLeft
