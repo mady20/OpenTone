@@ -58,12 +58,26 @@ class TimerRingView: UIView {
     }
 
     // REQUIRED for existing ProgressCell and other callers
-    func setProgress(value: CGFloat, max: CGFloat) {
-        progressLayer.strokeEnd = value / max
+    func setProgress(value: CGFloat, max maxValue: CGFloat) {
+        let target = maxValue > 0 ? min(Swift.max(value / maxValue, 0), 1) : 0
+        let fromValue = progressLayer.presentation()?.strokeEnd ?? progressLayer.strokeEnd
+
+        progressLayer.removeAnimation(forKey: "ringAnimation")
+        progressLayer.removeAnimation(forKey: "ringSyncAnimation")
+
+        let animation = CABasicAnimation(keyPath: "strokeEnd")
+        animation.fromValue = fromValue
+        animation.toValue = target
+        animation.duration = 0.95
+        animation.timingFunction = CAMediaTimingFunction(name: .linear)
+
+        progressLayer.strokeEnd = target
+        progressLayer.add(animation, forKey: "ringSyncAnimation")
     }
 
     func resetRing() {
         progressLayer.removeAllAnimations()
+        progressLayer.removeAnimation(forKey: "ringSyncAnimation")
         progressLayer.strokeEnd = 1.0
     }
 

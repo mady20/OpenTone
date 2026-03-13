@@ -243,7 +243,7 @@ final class SettingsViewController: UIViewController {
     }
 
     private func showPasswordEditor() {
-        guard var user = SessionManager.shared.currentUser else { return }
+        guard let user = SessionManager.shared.currentUser else { return }
 
         let alert = UIAlertController(title: "Update Password", message: nil, preferredStyle: .alert)
         alert.addTextField { tf in
@@ -267,10 +267,6 @@ final class SettingsViewController: UIViewController {
                 self?.showAlert(title: "Error", message: "All fields are required.")
                 return
             }
-            guard current == user.password else {
-                self?.showAlert(title: "Error", message: "Current password is incorrect.")
-                return
-            }
             guard newPass.count >= 6 else {
                 self?.showAlert(title: "Error", message: "New password must be at least 6 characters.")
                 return
@@ -280,9 +276,18 @@ final class SettingsViewController: UIViewController {
                 return
             }
 
-            user.password = newPass
-            SessionManager.shared.updateSessionUser(user)
-            self?.showAlert(title: "Success", message: "Password updated successfully.")
+            Task { @MainActor in
+                do {
+                    try await SupabaseAuth.updatePassword(
+                        email: user.email,
+                        currentPassword: current,
+                        newPassword: newPass
+                    )
+                    self?.showAlert(title: "Success", message: "Password updated successfully.")
+                } catch {
+                    self?.showAlert(title: "Error", message: error.localizedDescription)
+                }
+            }
         })
         alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
         present(alert, animated: true)

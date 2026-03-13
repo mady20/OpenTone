@@ -136,6 +136,7 @@ final class ProgressCell: UICollectionViewCell {
     private var dayLabels: [UILabel] = []
     private var storedBarValues: [Int] = Array(repeating: 0, count: 7)
     private var storedBarMax: Int = 1
+    private var currentRingProgress: CGFloat = 0
 
     // MARK: - Init
 
@@ -249,6 +250,13 @@ final class ProgressCell: UICollectionViewCell {
         updateBarFrames()
     }
 
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        ringProgressLayer.removeAnimation(forKey: "progressAnimation")
+        currentRingProgress = 0
+        ringProgressLayer.strokeEnd = 0
+    }
+
     private func drawRing() {
         let center = CGPoint(x: ringContainer.bounds.midX, y: ringContainer.bounds.midY)
         let radius = min(ringContainer.bounds.width, ringContainer.bounds.height) / 2 - 8
@@ -277,6 +285,25 @@ final class ProgressCell: UICollectionViewCell {
         if ringProgressLayer.superlayer == nil {
             ringContainer.layer.insertSublayer(ringProgressLayer, above: ringBackgroundLayer)
         }
+
+        ringProgressLayer.strokeEnd = currentRingProgress
+    }
+
+    private func animateRingProgress(to target: CGFloat) {
+        let clampedTarget = min(max(target, 0), 1)
+        let fromValue = ringProgressLayer.presentation()?.strokeEnd ?? ringProgressLayer.strokeEnd
+
+        ringProgressLayer.removeAnimation(forKey: "progressAnimation")
+
+        let animation = CABasicAnimation(keyPath: "strokeEnd")
+        animation.fromValue = fromValue
+        animation.toValue = clampedTarget
+        animation.duration = 0.55
+        animation.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+
+        currentRingProgress = clampedTarget
+        ringProgressLayer.strokeEnd = clampedTarget
+        ringProgressLayer.add(animation, forKey: "progressAnimation")
     }
 
     // MARK: - Weekly bars
@@ -360,12 +387,12 @@ final class ProgressCell: UICollectionViewCell {
 
         // Ring
         if data.dailyGoalMinutes <= 0 {
-            ringProgressLayer.strokeEnd = 0
+            animateRingProgress(to: 0)
             percentLabel.text = "—"
             goalSubLabel.text = "No schedule"
         } else {
             let pct = min(Double(data.todayMinutes) / Double(data.dailyGoalMinutes), 1.0)
-            ringProgressLayer.strokeEnd = CGFloat(pct)
+            animateRingProgress(to: CGFloat(pct))
             percentLabel.text = "\(Int(pct * 100))%"
 
             let remaining = max(0, data.dailyGoalMinutes - data.todayMinutes)

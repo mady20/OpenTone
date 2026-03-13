@@ -5,6 +5,8 @@ class SessionProgressManager {
     static let shared = SessionProgressManager()
     private init() {}
 
+    static let progressDataUpdatedNotification = Notification.Name("SessionProgressManager.progressDataUpdated")
+
     enum SessionType: String {
         case aiCall
         case twoMinJam
@@ -55,5 +57,7 @@ class SessionProgressManager {
             xp: type.xp,
             iconName: type.iconName
         )
+
+        NotificationCenter.default.post(name: Self.progressDataUpdatedNotification, object: nil)
     }
 }

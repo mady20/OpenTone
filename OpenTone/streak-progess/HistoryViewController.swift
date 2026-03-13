@@ -24,7 +24,7 @@ class HistoryViewController: UIViewController {
         tableView.separatorStyle = .none
 
         // Setup Header View Layout
-        headerView.frame = CGRect(x: 0, y: 0, width: view.bounds.width, height: 260)
+        headerView.frame = CGRect(x: 0, y: 0, width: view.bounds.width, height: 150)
         tableView.tableHeaderView = headerView
 
         setupSearchController()

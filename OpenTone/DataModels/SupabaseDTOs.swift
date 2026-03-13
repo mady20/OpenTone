@@ -14,7 +14,6 @@ struct UserRow: Codable {
     let id: UUID
     var name: String
     var email: String
-    var password: String
     var countryName: String?
     var countryCode: String?
     var avatar: String?
@@ -36,7 +35,7 @@ struct UserRow: Codable {
     var createdAt: Date?
 
     enum CodingKeys: String, CodingKey {
-        case id, name, email, password, avatar, age, gender, bio, goal, interests
+        case id, name, email, avatar, age, gender, bio, goal, interests
         case countryName    = "country_name"
         case countryCode    = "country_code"
         case englishLevel   = "english_level"
@@ -61,7 +60,6 @@ extension UserRow {
         self.id = user.id
         self.name = user.name
         self.email = user.email
-        self.password = user.password
         self.countryName = user.country?.name
         self.countryCode = user.country?.code
         self.avatar = user.avatar
@@ -88,7 +86,7 @@ extension UserRow {
         var user = User(
             name: name,
             email: email,
-            password: password,
+            password: "",
             country: countryCode != nil ? Country(name: countryName ?? "", code: countryCode!) : nil,
             age: age,
             gender: gender.flatMap { Gender(rawValue: $0) },

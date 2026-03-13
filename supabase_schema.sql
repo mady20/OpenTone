@@ -8,7 +8,6 @@ CREATE TABLE IF NOT EXISTS users (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name          TEXT NOT NULL,
   email         TEXT UNIQUE NOT NULL,
-  password      TEXT NOT NULL,
   country_name  TEXT,
   country_code  TEXT,
   avatar        TEXT,
@@ -116,3 +115,35 @@ CREATE TABLE IF NOT EXISTS reports (
   message            TEXT,
   timestamp          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- 8. Legacy migration + RLS hardening
+ALTER TABLE users DROP COLUMN IF EXISTS password;
+
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE activities ENABLE ROW LEVEL SECURITY;
+ALTER TABLE call_records ENABLE ROW LEVEL SECURITY;
+ALTER TABLE jam_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE completed_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE roleplay_sessions ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS users_select_own ON users;
+DROP POLICY IF EXISTS users_update_own ON users;
+DROP POLICY IF EXISTS users_insert_own ON users;
+CREATE POLICY users_select_own ON users FOR SELECT USING (auth.uid() = id);
+CREATE POLICY users_update_own ON users FOR UPDATE USING (auth.uid() = id);
+CREATE POLICY users_insert_own ON users FOR INSERT WITH CHECK (auth.uid() = id);
+
+DROP POLICY IF EXISTS activities_own_all ON activities;
+CREATE POLICY activities_own_all ON activities FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS call_records_own_all ON call_records;
+CREATE POLICY call_records_own_all ON call_records FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS jam_sessions_own_all ON jam_sessions;
+CREATE POLICY jam_sessions_own_all ON jam_sessions FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS completed_sessions_own_all ON completed_sessions;
+CREATE POLICY completed_sessions_own_all ON completed_sessions FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS roleplay_sessions_own_all ON roleplay_sessions;
+CREATE POLICY roleplay_sessions_own_all ON roleplay_sessions FOR ALL USING (auth.uid() = user_id) WITH CHECK (auth.uid() = user_id);

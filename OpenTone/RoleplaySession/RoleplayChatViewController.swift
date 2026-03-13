@@ -7,6 +7,71 @@ private final class RoleplayDisplayLinkProxy {
     @objc func step(_ link: CADisplayLink) { target?.updateAnimation() }
 }
 
+private final class ProgrammaticChatBubbleCell: UITableViewCell {
+    private let bubbleView = UIView()
+    private let messageLabel = UILabel()
+    private var leadingConstraint: NSLayoutConstraint?
+    private var trailingConstraint: NSLayoutConstraint?
+
+    override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
+        super.init(style: style, reuseIdentifier: reuseIdentifier)
+        setupCell()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setupCell()
+    }
+
+    private func setupCell() {
+        backgroundColor = .clear
+        selectionStyle = .none
+
+        bubbleView.translatesAutoresizingMaskIntoConstraints = false
+        bubbleView.layer.cornerRadius = 18
+        bubbleView.clipsToBounds = true
+        contentView.addSubview(bubbleView)
+
+        messageLabel.translatesAutoresizingMaskIntoConstraints = false
+        messageLabel.numberOfLines = 0
+        bubbleView.addSubview(messageLabel)
+
+        leadingConstraint = bubbleView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16)
+        trailingConstraint = bubbleView.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16)
+
+        NSLayoutConstraint.activate([
+            bubbleView.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 8),
+            bubbleView.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -8),
+            bubbleView.widthAnchor.constraint(lessThanOrEqualTo: contentView.widthAnchor, multiplier: 0.78),
+            messageLabel.topAnchor.constraint(equalTo: bubbleView.topAnchor, constant: 12),
+            messageLabel.leadingAnchor.constraint(equalTo: bubbleView.leadingAnchor, constant: 14),
+            messageLabel.trailingAnchor.constraint(equalTo: bubbleView.trailingAnchor, constant: -14),
+            messageLabel.bottomAnchor.constraint(equalTo: bubbleView.bottomAnchor, constant: -12),
+        ])
+    }
+
+    func configure(text: String, isUser: Bool) {
+        messageLabel.text = text
+        if isUser {
+            messageLabel.textColor = AppColors.textOnPrimary
+            bubbleView.backgroundColor = AppColors.primary
+            bubbleView.layer.borderWidth = 0
+            bubbleView.layer.borderColor = UIColor.clear.cgColor
+            bubbleView.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner, .layerMinXMaxYCorner]
+            leadingConstraint?.isActive = false
+            trailingConstraint?.isActive = true
+        } else {
+            messageLabel.textColor = AppColors.textPrimary
+            bubbleView.backgroundColor = AppColors.cardBackground
+            bubbleView.layer.borderWidth = 1
+            bubbleView.layer.borderColor = AppColors.cardBorder.cgColor
+            bubbleView.layer.maskedCorners = [.layerMinXMinYCorner, .layerMaxXMinYCorner, .layerMaxXMaxYCorner]
+            trailingConstraint?.isActive = false
+            leadingConstraint?.isActive = true
+        }
+    }
+}
+
 enum ChatSender {
     case app
     case user
@@ -104,6 +169,8 @@ class RoleplayChatViewController: UIViewController {
         // Keep the data model in sync so save-for-later works
         RoleplaySessionDataModel.shared.activeScenario = scenario
 
+        buildProgrammaticLayout()
+
         title = scenario.title
         setupUI()
         setupTableView()
@@ -115,23 +182,66 @@ class RoleplayChatViewController: UIViewController {
         NSLayoutConstraint.activate([
             statusLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             statusLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
+            tableView.topAnchor.constraint(equalTo: statusLabel.bottomAnchor, constant: 16),
         ])
-        tableView.contentInset.top = 40
+        tableView.contentInset.top = 8
         currentState = .idle
 
         AudioManager.shared.onFinalTranscription = { [weak self] text in
             self?.handleUserTranscription(text)
         }
 
-        AudioManager.shared.onRecordingStateChanged = { [weak self] isRecording in
-            DispatchQueue.main.async {
-                self?.updateMicUI(isRecording: isRecording)
-            }
-        }
-
         AudioManager.shared.onAudioBuffer = { [weak self] buffer in
             self?.processAudio(buffer)
         }
+    }
+
+    private func buildProgrammaticLayout() {
+        tableView?.removeFromSuperview()
+        micButton?.removeFromSuperview()
+        replayButton?.removeFromSuperview()
+        exitButton?.removeFromSuperview()
+
+        let newTableView = UITableView(frame: .zero, style: .plain)
+        newTableView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(newTableView)
+        tableView = newTableView
+
+        let newMicButton = UIButton(type: .system)
+        newMicButton.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(newMicButton)
+        micButton = newMicButton
+
+        let newReplayButton = UIButton(type: .system)
+        newReplayButton.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(newReplayButton)
+        replayButton = newReplayButton
+
+        let newExitButton = UIButton(type: .system)
+        newExitButton.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(newExitButton)
+        exitButton = newExitButton
+
+        NSLayoutConstraint.activate([
+            micButton.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            micButton.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -24),
+            micButton.widthAnchor.constraint(equalToConstant: 72),
+            micButton.heightAnchor.constraint(equalToConstant: 72),
+
+            replayButton.centerYAnchor.constraint(equalTo: micButton.centerYAnchor),
+            replayButton.trailingAnchor.constraint(equalTo: micButton.leadingAnchor, constant: -24),
+            replayButton.widthAnchor.constraint(equalToConstant: 56),
+            replayButton.heightAnchor.constraint(equalToConstant: 56),
+
+            exitButton.centerYAnchor.constraint(equalTo: micButton.centerYAnchor),
+            exitButton.leadingAnchor.constraint(equalTo: micButton.trailingAnchor, constant: 24),
+            exitButton.widthAnchor.constraint(equalToConstant: 56),
+            exitButton.heightAnchor.constraint(equalToConstant: 56),
+
+            tableView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            tableView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            tableView.bottomAnchor.constraint(equalTo: micButton.topAnchor, constant: -64),
+        ])
     }
     
     private func setupUI() {
@@ -144,7 +254,7 @@ class RoleplayChatViewController: UIViewController {
         switch currentState {
         case .idle:       statusLabel.text = "Hold mic to speak"
         case .listening:  statusLabel.text = "Listening…"
-        case .processing: statusLabel.text = "Processing…"
+        case .processing: statusLabel.text = "Thinking…"
         case .speaking:   statusLabel.text = "Speaking…"
         }
     }
@@ -153,6 +263,9 @@ class RoleplayChatViewController: UIViewController {
         tableView.delegate = self
         tableView.dataSource = self
         tableView.backgroundColor = AppColors.screenBackground
+        tableView.register(ProgrammaticChatBubbleCell.self, forCellReuseIdentifier: "AppMessageCell")
+        tableView.register(ProgrammaticChatBubbleCell.self, forCellReuseIdentifier: "UserMessageCell")
+        tableView.register(SuggestionCell.self, forCellReuseIdentifier: "SuggestionCell")
         tableView.rowHeight = UITableView.automaticDimension
         tableView.estimatedRowHeight = 120
         tableView.separatorStyle = .none
@@ -595,17 +708,6 @@ class RoleplayChatViewController: UIViewController {
         }
     }
 
-    // MARK: - Mic UI
-    
-    private func updateMicUI(isRecording: Bool) {
-        if isRecording {
-            micButton.tintColor = .white
-            micButton.backgroundColor = .systemRed
-        } else {
-            UIHelper.updateCircularIconButton(micButton)
-        }
-    }
-
     @IBAction func micTapped(_ sender: UIButton) {
         // Push-to-talk is handled through long-press gesture.
     }
@@ -706,7 +808,7 @@ class RoleplayChatViewController: UIViewController {
         
         // Calculate actual duration in minutes
         let seconds = session.endedAt?.timeIntervalSince(session.startedAt) ?? 0
-        let actualMinutes = max(1, Int(seconds) / 60)
+        let actualMinutes = max(1, Int(ceil(seconds / 60.0)))
 
         SessionProgressManager.shared.markCompleted(.roleplay, topic: scenario.title, actualDurationMinutes: actualMinutes)
 
@@ -764,7 +866,7 @@ class RoleplayChatViewController: UIViewController {
             
             // Calculate actual duration in minutes
             let seconds = session.endedAt?.timeIntervalSince(session.startedAt) ?? 0
-            let actualMinutes = max(1, Int(seconds) / 60)
+            let actualMinutes = max(1, Int(ceil(seconds / 60.0)))
 
             SessionProgressManager.shared.markCompleted(.roleplay, topic: scenario.title, actualDurationMinutes: actualMinutes)
 
@@ -978,16 +1080,16 @@ extension RoleplayChatViewController: UITableViewDataSource, UITableViewDelegate
             let cell = tableView.dequeueReusableCell(
                 withIdentifier: "AppMessageCell",
                 for: indexPath
-            ) as! AppMessageCell
-            cell.messageLabel.text = msg.text
+            ) as! ProgrammaticChatBubbleCell
+            cell.configure(text: msg.text, isUser: false)
             return cell
 
         case .user:
             let cell = tableView.dequeueReusableCell(
                 withIdentifier: "UserMessageCell",
                 for: indexPath
-            ) as! UserMessageCell
-            cell.messageLabel.text = msg.text
+            ) as! ProgrammaticChatBubbleCell
+            cell.configure(text: msg.text, isUser: true)
             return cell
 
         case .suggestions:

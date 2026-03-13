@@ -19,11 +19,18 @@ final class SessionManager {
     }
 
     private init() {
-        restoreSession()
+        Task { @MainActor in
+            await restoreSessionFromSupabase()
+        }
     }
 
     func restoreSession() {
         currentUser = UserDataModel.shared.getCurrentUser()
+    }
+
+    func restoreSessionFromSupabase() async {
+        _ = await SupabaseAuth.hasActiveSession()
+        refreshSession()
     }
 
     func login(user: User) {
@@ -33,11 +40,27 @@ final class SessionManager {
     }
 
     func logout() {
+        Task { @MainActor in
+            await logoutAsync()
+        }
+    }
+
+    func logoutAsync() async {
+        do {
+            try await SupabaseAuth.signOut()
+        } catch {
+            print("❌ Supabase sign out failed: \(error.localizedDescription)")
+        }
+
         currentUser = nil
         UserDataModel.shared.deleteCurrentUser()
         // Clear cached speech coaching data so the next user starts fresh
         UserDefaults.standard.removeObject(forKey: "opentone.lastWpmDelta")
         reloadAllDataModels()
+    }
+
+    func hasAuthenticatedAPIAccess() async -> Bool {
+        await SupabaseAuth.accessToken() != nil
     }
 
     /// Tells every data-model singleton to drop cached data and reload

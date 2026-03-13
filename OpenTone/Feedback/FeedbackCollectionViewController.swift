@@ -53,6 +53,7 @@ class FeedbackCollectionViewController: UIViewController {
     private var analysisResponse: SpeechAnalysisResponse?
     private var isLoading = true
     private var errorMessage: String?
+    private var hasPresentedDailyGoalAchievement = false
 
     private var collectionView: UICollectionView!
 
@@ -163,6 +164,7 @@ class FeedbackCollectionViewController: UIViewController {
             self.feedback = FeedbackMapper.toFeedback(preloaded)
             self.isLoading = false
             self.collectionView.reloadData()
+            handleFeedbackLifecycleUpdate()
             return
         }
 
@@ -216,11 +218,56 @@ class FeedbackCollectionViewController: UIViewController {
             type: activityType,
             feedback: sessionFeedback
         )
+
+        handleFeedbackLifecycleUpdate()
+    }
+
+    private func handleFeedbackLifecycleUpdate() {
+        NotificationCenter.default.post(name: SessionProgressManager.progressDataUpdatedNotification, object: nil)
+        maybePresentDailyGoalAchievement()
+    }
+
+    private func maybePresentDailyGoalAchievement() {
+        guard !hasPresentedDailyGoalAchievement else { return }
+        guard shouldPresentDailyGoalAchievement() else { return }
+
+        hasPresentedDailyGoalAchievement = true
+        markDailyGoalAchievementShown()
+
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            let achievementVC = DailyGoalAchievementViewController()
+            achievementVC.modalPresentationStyle = .overFullScreen
+            self.present(achievementVC, animated: true)
+        }
+    }
+
+    private func shouldPresentDailyGoalAchievement() -> Bool {
+        let todayMinutes = StreakDataModel.shared.totalMinutes(for: Date())
+        let goal = StreakDataModel.shared.getStreak()?.commitment ?? 0
+        guard goal > 0, todayMinutes >= goal else { return false }
+
+        let key = dailyGoalAchievementKey()
+        return !UserDefaults.standard.bool(forKey: key)
+    }
+
+    private func markDailyGoalAchievementShown() {
+        UserDefaults.standard.set(true, forKey: dailyGoalAchievementKey())
+    }
+
+    private func dailyGoalAchievementKey() -> String {
+        let userKey = UserDataModel.shared.getCurrentUser()?.id.uuidString ?? "anonymous"
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        let dayKey = formatter.string(from: Date())
+        return "opentone.dailyGoalAchievement.\(userKey).\(dayKey)"
     }
 
     // MARK: - Actions
 
     @objc private func doneTapped() {
+        NotificationCenter.default.post(name: SessionProgressManager.progressDataUpdatedNotification, object: nil)
+
         // If presented modally (e.g. from AI Call), dismiss the entire nav stack
         if presentingViewController != nil || navigationController?.presentingViewController != nil {
             dismiss(animated: true)

@@ -18,8 +18,8 @@ final class UserDataModel {
     private init() {
         // Kick off an async load — callers should observe `allUsers` after this completes.
         Task { @MainActor in
-            await loadAllUsersFromSupabase()
             await restoreCurrentUser()
+            await loadAllUsersFromSupabase()
             self.isLoaded = true
             SessionManager.shared.refreshSession()
             NotificationCenter.default.post(name: NSNotification.Name("UserDataModelLoaded"), object: nil)
@@ -73,35 +73,52 @@ final class UserDataModel {
         return true
     }
 
-    func authenticate(email: String, password: String) -> User? {
-        // Try local cache first
-        if let cached = allUsers.first(where: { $0.email == email && $0.password == password }) {
-            return cached
-        }
-        return nil
-    }
-
-    /// Async version that queries Supabase directly.
-    func authenticateAsync(email: String, password: String) async -> User? {
+    /// Registers credentials in Supabase Auth, then upserts a profile row in `users`.
+    func registerWithSupabaseAuth(name: String, email: String, password: String) async -> User? {
         do {
-            let rows: [UserRow] = try await supabase
-                .from(SupabaseTable.users)
-                .select()
-                .eq("email", value: email)
-                .eq("password", value: password)
-                .execute()
-                .value
-            guard let row = rows.first else { return nil }
-            let user = row.toUser()
-            // Update cache
+            try await SupabaseAuth.signUp(email: email, password: password)
+            let authUser = try await SupabaseAuth.signIn(email: email, password: password)
+            var user = User(
+                name: name,
+                email: email,
+                password: "",
+                country: nil,
+                avatar: "pp1"
+            )
+            user.setID(authUser.id)
+
+            await insertUserInSupabase(user)
             await MainActor.run {
+                self.setCurrentUser(user)
                 if !self.allUsers.contains(where: { $0.id == user.id }) {
                     self.allUsers.append(user)
                 }
             }
             return user
         } catch {
-            print("❌ Supabase auth error: \(error.localizedDescription)")
+            print("❌ Supabase signup error: \(error.localizedDescription)")
+            return nil
+        }
+    }
+
+    func authenticate(email: String, password: String) async -> User? {
+        do {
+            let authUser = try await SupabaseAuth.signIn(email: email, password: password)
+            let user = try await fetchOrCreateProfile(
+                userID: authUser.id,
+                email: authUser.email ?? email,
+                suggestedName: nil
+            )
+
+            await MainActor.run {
+                self.setCurrentUser(user)
+                if !self.allUsers.contains(where: { $0.id == user.id }) {
+                    self.allUsers.append(user)
+                }
+            }
+            return user
+        } catch {
+            print("❌ Supabase login error: \(error.localizedDescription)")
             return nil
         }
     }
@@ -152,10 +169,25 @@ final class UserDataModel {
     // MARK: - Supabase Operations
 
     private func loadAllUsersFromSupabase() async {
+        guard await SupabaseAuth.hasActiveSession() else {
+            await MainActor.run {
+                self.allUsers = []
+            }
+            return
+        }
+
+        guard let authUserID = await SupabaseAuth.currentUserID() else {
+            await MainActor.run {
+                self.allUsers = []
+            }
+            return
+        }
+
         do {
             let rows: [UserRow] = try await supabase
                 .from(SupabaseTable.users)
                 .select()
+                .eq("id", value: authUserID.uuidString)
                 .execute()
                 .value
             let users = rows.map { $0.toUser() }
@@ -164,47 +196,97 @@ final class UserDataModel {
             }
         } catch {
             print("❌ Failed to load users from Supabase: \(error.localizedDescription)")
-            // Fallback: seed sample users if the table is empty
-            await seedSampleUsersIfNeeded()
+            await MainActor.run {
+                self.allUsers = []
+            }
         }
     }
 
     private func restoreCurrentUser() async {
-        guard let idString = UserDefaults.standard.string(forKey: currentUserIDKey),
-              let id = UUID(uuidString: idString) else {
-            // No stored session — try to pick a sample user
+        guard await SupabaseAuth.hasActiveSession() else {
             await MainActor.run {
-                self.currentUser = self.allUsers.last
+                self.currentUser = nil
+                UserDefaults.standard.removeObject(forKey: self.currentUserIDKey)
             }
             return
         }
 
-        // Try local cache
-        if let cached = allUsers.first(where: { $0.id == id }) {
-            await MainActor.run { self.currentUser = cached }
-            return
-        }
-
-        // Fetch from Supabase
         do {
-            let rows: [UserRow] = try await supabase
-                .from(SupabaseTable.users)
-                .select()
-                .eq("id", value: id.uuidString)
-                .execute()
-                .value
-            if let row = rows.first {
-                let user = row.toUser()
+            let sessionUser = try await SupabaseAuth.sessionUser()
+            if let cached = allUsers.first(where: { $0.id == sessionUser.id }) {
                 await MainActor.run {
-                    self.currentUser = user
-                    if !self.allUsers.contains(where: { $0.id == user.id }) {
-                        self.allUsers.append(user)
-                    }
+                    self.currentUser = cached
+                    UserDefaults.standard.set(cached.id.uuidString, forKey: self.currentUserIDKey)
+                }
+                return
+            }
+
+            let user = try await fetchOrCreateProfile(
+                userID: sessionUser.id,
+                email: sessionUser.email,
+                suggestedName: nil
+            )
+            await MainActor.run {
+                self.currentUser = user
+                UserDefaults.standard.set(user.id.uuidString, forKey: self.currentUserIDKey)
+                if !self.allUsers.contains(where: { $0.id == user.id }) {
+                    self.allUsers.append(user)
                 }
             }
         } catch {
-            print("❌ Failed to restore user from Supabase: \(error.localizedDescription)")
+            print("❌ Failed to restore Supabase session user: \(error.localizedDescription)")
+            await MainActor.run {
+                self.currentUser = nil
+                UserDefaults.standard.removeObject(forKey: self.currentUserIDKey)
+            }
         }
+    }
+
+    /// Test hook: exercises the same restore logic used on app launch.
+    func restoreCurrentUserFromSessionForTesting() async {
+        await restoreCurrentUser()
+    }
+
+    func cacheUserForTesting(_ user: User) {
+        if let index = allUsers.firstIndex(where: { $0.id == user.id }) {
+            allUsers[index] = user
+        } else {
+            allUsers.append(user)
+        }
+    }
+
+    private func fetchOrCreateProfile(userID: UUID, email: String?, suggestedName: String?) async throws -> User {
+        let rows: [UserRow] = try await supabase
+            .from(SupabaseTable.users)
+            .select()
+            .eq("id", value: userID.uuidString)
+            .limit(1)
+            .execute()
+            .value
+
+        if let row = rows.first {
+            return row.toUser()
+        }
+
+        let defaultName: String
+        if let suggestedName, !suggestedName.isEmpty {
+            defaultName = suggestedName
+        } else if let email {
+            defaultName = email.split(separator: "@").first.map(String.init) ?? "OpenTone User"
+        } else {
+            defaultName = "OpenTone User"
+        }
+
+        var user = User(
+            name: defaultName,
+            email: email ?? "",
+            password: "",
+            country: nil,
+            avatar: "pp1"
+        )
+        user.setID(userID)
+        await insertUserInSupabase(user)
+        return user
     }
 
     private func insertUserInSupabase(_ user: User) async {
@@ -229,39 +311,6 @@ final class UserDataModel {
                 .execute()
         } catch {
             print("❌ Failed to update user: \(error.localizedDescription)")
-        }
-    }
-
-    // MARK: - Sample Data Seeding
-
-    private func seedSampleUsersIfNeeded() async {
-        // Check if table is actually empty
-        do {
-            let rows: [UserRow] = try await supabase
-                .from(SupabaseTable.users)
-                .select()
-                .limit(1)
-                .execute()
-                .value
-            guard rows.isEmpty else { return }
-        } catch {
-            // If we can't even query, don't seed
-            return
-        }
-
-        let sampleUsers = loadSampleUsers()
-        for user in sampleUsers {
-            await insertUserInSupabase(user)
-        }
-
-        await MainActor.run {
-            self.allUsers = sampleUsers
-            if self.currentUser == nil {
-                self.currentUser = sampleUsers.last
-                if let id = sampleUsers.last?.id {
-                    UserDefaults.standard.set(id.uuidString, forKey: self.currentUserIDKey)
-                }
-            }
         }
     }
 

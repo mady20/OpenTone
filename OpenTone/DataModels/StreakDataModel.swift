@@ -11,6 +11,7 @@ class StreakDataModel {
 
     private var sessions: [CompletedSession] = []
     private var streak: Streak?
+    private(set) var isLoaded = false
 
     private init() {
         Task {
@@ -23,6 +24,7 @@ class StreakDataModel {
     func reloadForCurrentUser() {
         sessions = []
         streak = nil
+        isLoaded = false
         Task {
             await loadData()
         }
@@ -165,6 +167,7 @@ class StreakDataModel {
     private func loadData() async {
         await loadStreakFromSupabase()
         await loadSessionsFromSupabase()
+        isLoaded = true
         
         NotificationCenter.default.post(name: StreakDataModel.streakDataLoadedNotification, object: nil)
     }

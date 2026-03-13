@@ -10,6 +10,7 @@ class HistoryDataModel {
     static let historyDataLoadedNotification = Notification.Name("HistoryDataModel.historyDataLoaded")
 
     private var activities: [Activity] = []
+    private(set) var isLoaded = false
 
     private init() {
         Task {
@@ -20,6 +21,7 @@ class HistoryDataModel {
     /// Clears in-memory data and reloads for the current user.
     func reloadForCurrentUser() {
         activities = []
+        isLoaded = false
         Task {
             await loadHistory()
         }
@@ -110,6 +112,7 @@ class HistoryDataModel {
         var mutableUpdated = updated
         mutableUpdated.setID(old.id)
         activities[index] = mutableUpdated
+        NotificationCenter.default.post(name: HistoryDataModel.historyDataLoadedNotification, object: nil)
     }
 
     // MARK: - Supabase Operations
@@ -117,6 +120,8 @@ class HistoryDataModel {
     private func loadHistory() async {
         guard let userId = UserDataModel.shared.getCurrentUser()?.id else {
             activities = []
+            isLoaded = true
+            NotificationCenter.default.post(name: HistoryDataModel.historyDataLoadedNotification, object: nil)
             return
         }
 
@@ -129,11 +134,13 @@ class HistoryDataModel {
                 .execute()
                 .value
             activities = rows.map { $0.toActivity() }
+            isLoaded = true
             
             NotificationCenter.default.post(name: HistoryDataModel.historyDataLoadedNotification, object: nil)
         } catch {
             print("❌ Failed to load activities: \(error.localizedDescription)")
             activities = []
+            isLoaded = true
             NotificationCenter.default.post(name: HistoryDataModel.historyDataLoadedNotification, object: nil)
         }
     }

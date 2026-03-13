@@ -116,22 +116,29 @@ final class LoginViewController: UIViewController {
     }
 
     @IBAction func appleButtonTapped(_ sender: Any) {
-        handleQuickSignIn()
+        showAppleSignInUnavailableAlert()
+    }
+
+    private func showAppleSignInUnavailableAlert() {
+        let alert = UIAlertController(
+            title: "Apple Sign-In Unavailable",
+            message: "This feature is not working right now. Please use email or Google sign-in.",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        present(alert, animated: true)
     }
 
     
     
     private func handleQuickSignIn() {
-        // Get the first sample user who has complete onboarding data
-        guard let sampleUser = UserDataModel.shared.getSampleUserForQuickSignIn() else {
-            let alert = UIAlertController(title: "Error", message: "Could not load sample user", preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: "OK", style: .default))
-            present(alert, animated: true)
-            return
-        }
-
-        SessionManager.shared.login(user: sampleUser)
-        goToDashboard()
+        let alert = UIAlertController(
+            title: "Not Available",
+            message: "Quick sign-in is disabled. Please use your email and password.",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        present(alert, animated: true)
     }
 
     private func handleLogin() {
@@ -145,19 +152,17 @@ final class LoginViewController: UIViewController {
             return
         }
 
-        guard let user = UserDataModel.shared.authenticate(
-            email: email,
-            password: password
-        ) else {
-            // show "Invalid email or password"
-            let alert = UIAlertController(title: "Login Failed", message: "Invalid email or password", preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: "OK", style: .default))
-            present(alert, animated: true)
-            return
-        }
+        Task { @MainActor in
+            guard let user = await UserDataModel.shared.authenticate(email: email, password: password) else {
+                let alert = UIAlertController(title: "Login Failed", message: "Invalid email or password", preferredStyle: .alert)
+                alert.addAction(UIAlertAction(title: "OK", style: .default))
+                present(alert, animated: true)
+                return
+            }
 
-        SessionManager.shared.login(user: user)
-        routeAfterLogin()
+            SessionManager.shared.login(user: user)
+            routeAfterLogin()
+        }
     }
 
     private func routeAfterLogin() {

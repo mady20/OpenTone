@@ -239,21 +239,27 @@ final class SignupViewController: UIViewController {
     }
 
     @IBAction func appleButtonTapped(_ sender: Any) {
-        handleQuickSignIn()
+        showAppleSignInUnavailableAlert()
+    }
+
+    private func showAppleSignInUnavailableAlert() {
+        let alert = UIAlertController(
+            title: "Apple Sign-In Unavailable",
+            message: "This feature is not working right now. Please use email.",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        present(alert, animated: true)
     }
 
     private func handleQuickSignIn() {
-        // Get the first sample user who has complete onboarding data
-        guard let sampleUser = UserDataModel.shared.getSampleUserForQuickSignIn() else {
-            let alert = UIAlertController(title: "Error", message: "Could not load sample user", preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: "OK", style: .default))
-            present(alert, animated: true)
-            return
-        }
-
-        SessionManager.shared.login(user: sampleUser)
-        SampleDataSeeder.shared.seedIfNeeded()
-        goToDashboard()
+        let alert = UIAlertController(
+            title: "Not Available",
+            message: "Quick sign-in is disabled. Please create an account with email and password.",
+            preferredStyle: .alert
+        )
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        present(alert, animated: true)
     }
 
     @IBAction func signinButtonTapped(_ sender: UIButton) {
@@ -273,22 +279,19 @@ final class SignupViewController: UIViewController {
             return
         }
 
-        let user = User(
-            name: name,
-            email: email,
-            password: password,
-            country: nil,
-            avatar: "pp1"
-        )
+        Task { @MainActor in
+            guard let user = await UserDataModel.shared.registerWithSupabaseAuth(
+                name: name,
+                email: email,
+                password: password
+            ) else {
+                showUserExistsAlert()
+                return
+            }
 
-        let success = UserDataModel.shared.registerUser(user)
-        guard success else {
-            showUserExistsAlert()
-            return
+            SessionManager.shared.login(user: user)
+            goToUserInfo()
         }
-
-        SessionManager.shared.login(user: user)
-        goToUserInfo()
     }
 
     private func showUserExistsAlert() {

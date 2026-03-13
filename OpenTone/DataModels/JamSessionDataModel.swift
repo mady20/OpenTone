@@ -307,7 +307,7 @@ class JamSessionDataModel {
         }
         
         // Convert to minutes for history and streak tracking
-        let durationMinutes = max(1, durationSeconds / 60)
+        let durationMinutes = max(1, Int(ceil(Double(durationSeconds) / 60.0)))
 
         UserDataModel.shared.addJamSessionID(session.id)
 

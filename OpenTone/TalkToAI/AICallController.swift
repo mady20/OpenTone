@@ -790,7 +790,7 @@ final class AICallController: UIViewController {
         SessionProgressManager.shared.markCompleted(
             .aiCall,
             topic: "Open Conversation",
-            actualDurationMinutes: max(1, Int(duration) / 60)
+            actualDurationMinutes: max(1, Int(ceil(duration / 60.0)))
         )
 
         // Build the full user transcript from preserved user turns.

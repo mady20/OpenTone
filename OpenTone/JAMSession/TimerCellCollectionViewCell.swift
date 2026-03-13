@@ -89,12 +89,15 @@ extension TimerCellCollectionViewCell: TimerManagerDelegate {
            let m = Int(parts[0]),
            let s = Int(parts[1]) {
             currentSeconds = m * 60 + s
+            timerRingView.setProgress(value: CGFloat(currentSeconds), max: 30)
             delegate?.timerDidUpdate(secondsLeft: currentSeconds)
         }
     }
 
     func timerManagerDidFinish() {
         timerLabel.text = "00:00"
+        currentSeconds = 0
+        timerRingView.setProgress(value: 0, max: 30)
         delegate?.timerDidFinish()
     }
 }

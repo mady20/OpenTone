@@ -45,6 +45,80 @@ let supabase = SupabaseClient(
     )
 )
 
+enum SupabaseAuth {
+    // Test hooks
+    static var signInOverride: ((String, String) async throws -> (id: UUID, email: String?))?
+    static var signUpOverride: ((String, String) async throws -> Void)?
+    static var signOutOverride: (() async throws -> Void)?
+    static var sessionUserOverride: (() async throws -> (id: UUID, email: String?))?
+    static var hasActiveSessionOverride: (() async -> Bool)?
+    static var accessTokenOverride: (() async -> String?)?
+    static var updatePasswordOverride: ((String, String) async throws -> Void)?
+
+    static func signIn(email: String, password: String) async throws -> (id: UUID, email: String?) {
+        if let override = signInOverride {
+            return try await override(email, password)
+        }
+        let session = try await supabase.auth.signIn(email: email, password: password)
+        return (session.user.id, session.user.email)
+    }
+
+    static func signUp(email: String, password: String) async throws {
+        if let override = signUpOverride {
+            try await override(email, password)
+            return
+        }
+        _ = try await supabase.auth.signUp(email: email, password: password)
+    }
+
+    static func signOut() async throws {
+        if let override = signOutOverride {
+            try await override()
+            return
+        }
+        try await supabase.auth.signOut()
+    }
+
+    static func sessionUser() async throws -> (id: UUID, email: String?) {
+        if let override = sessionUserOverride {
+            return try await override()
+        }
+        let session = try await supabase.auth.session
+        return (session.user.id, session.user.email)
+    }
+
+    /// Returns true when a persisted or refreshed auth session is available.
+    static func hasActiveSession() async -> Bool {
+        if let override = hasActiveSessionOverride {
+            return await override()
+        }
+        return (try? await supabase.auth.session) != nil
+    }
+
+    /// Returns the active access token when present.
+    static func accessToken() async -> String? {
+        if let override = accessTokenOverride {
+            return await override()
+        }
+        return try? await supabase.auth.session.accessToken
+    }
+
+    /// Returns the authenticated user id if a session exists.
+    static func currentUserID() async -> UUID? {
+        try? await sessionUser().id
+    }
+
+    static func updatePassword(email: String, currentPassword: String, newPassword: String) async throws {
+        if let override = updatePasswordOverride {
+            try await override(currentPassword, newPassword)
+            return
+        }
+
+        _ = try await supabase.auth.signIn(email: email, password: currentPassword)
+        try await supabase.auth.update(user: UserAttributes(password: newPassword))
+    }
+}
+
 // MARK: - Supabase Table Names
 
 /// Constants for table names to avoid string typos.

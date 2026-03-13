@@ -43,6 +43,7 @@ class HomeCollectionViewController: UICollectionViewController {
     
 
     var recommendedScenarios: [RoleplayScenario] = []
+    private var pendingProgressReload: DispatchWorkItem?
 
     
     override func viewDidLoad() {
@@ -88,18 +89,55 @@ class HomeCollectionViewController: UICollectionViewController {
             name: StreakDataModel.streakDataLoadedNotification,
             object: nil
         )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleHistoryDataLoaded),
+            name: HistoryDataModel.historyDataLoadedNotification,
+            object: nil
+        )
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleProgressDataUpdated),
+            name: SessionProgressManager.progressDataUpdatedNotification,
+            object: nil
+        )
     }
 
     @objc private func handleStreakDataLoaded() {
-        // Run on main thread to be safe, although Notification is posted from MainActor
-        DispatchQueue.main.async { [weak self] in
+        scheduleProgressReload(fullReload: false)
+    }
+
+    @objc private func handleHistoryDataLoaded() {
+        scheduleProgressReload(fullReload: false)
+    }
+
+    @objc private func handleProgressDataUpdated() {
+        scheduleProgressReload(fullReload: false)
+    }
+
+    private func scheduleProgressReload(fullReload: Bool) {
+        pendingProgressReload?.cancel()
+
+        let work = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
             self.syncFromSession()
-            self.collectionView.reloadData()
+
+            guard self.isViewLoaded else { return }
+            if fullReload {
+                self.collectionView.reloadData()
+            } else {
+                self.collectionView.reloadSections(IndexSet(integer: DashboardSection.progress.rawValue))
+            }
         }
+
+        pendingProgressReload = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05, execute: work)
     }
 
     deinit {
+        pendingProgressReload?.cancel()
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -127,7 +165,11 @@ class HomeCollectionViewController: UICollectionViewController {
 
         syncFromSession()
         collectionView.setCollectionViewLayout(createLayout(), animated: false)
-        collectionView.reloadData()
+        if StreakDataModel.shared.isLoaded && HistoryDataModel.shared.isLoaded {
+            collectionView.reloadData()
+        } else {
+            scheduleProgressReload(fullReload: true)
+        }
         fetchSpeechProfile()
     }
 
