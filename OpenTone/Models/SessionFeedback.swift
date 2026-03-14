@@ -7,6 +7,9 @@ struct SessionFeedback: Identifiable, Equatable, Codable {
     let mispronouncedWords: [String]
     let fluencyScore: Double   
     let onTopicScore: Double
+    let confidenceScore: Double?
+    let clarityScore: Double?
+    let overallScore: Double?
     let pauses: Int 
     let summary: String
     let createdAt: Date

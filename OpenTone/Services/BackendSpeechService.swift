@@ -511,6 +511,9 @@ extension BackendSpeechService {
             mispronouncedWords: [],
             fluencyScore: r.coaching.scores.fluency,
             onTopicScore: r.coaching.scores.clarity,
+            confidenceScore: r.coaching.scores.confidence,
+            clarityScore: r.coaching.scores.clarity,
+            overallScore: r.coaching.scores.overall,
             pauses: r.metrics.pauses,
             summary: r.progress.weeklySummary,
             createdAt: Date()

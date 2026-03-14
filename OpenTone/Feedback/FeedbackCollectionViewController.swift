@@ -8,6 +8,10 @@
 
 import UIKit
 
+extension Notification.Name {
+    static let roleplayFeedbackCompleted = Notification.Name("OpenTone.roleplayFeedbackCompleted")
+}
+
 // MARK: - Section model
 
 private enum FeedbackSection: Int, CaseIterable {
@@ -42,6 +46,7 @@ class FeedbackCollectionViewController: UIViewController {
     var sessionMode: FeedbackSessionMode = .jam
     var activityType: ActivityType = .jam
     var feedbackEngine: FeedbackEngine = FeedbackEngineFactory.makeDefault()
+    var aiFeedbackEnabled: Bool?
 
     /// Pre-fetched response — if set, the VC skips its own network call.
     /// Used by AI Call and Roleplay to inject the already-fetched analysis.
@@ -56,6 +61,13 @@ class FeedbackCollectionViewController: UIViewController {
     private var hasPresentedDailyGoalAchievement = false
 
     private var collectionView: UICollectionView!
+
+    private var effectiveAIFeedbackEnabled: Bool {
+        if let aiFeedbackEnabled {
+            return aiFeedbackEnabled
+        }
+        return UserDataModel.shared.getCurrentUser()?.aiFeedbackEnabled ?? false
+    }
 
     // MARK: - Lifecycle
 
@@ -160,10 +172,12 @@ class FeedbackCollectionViewController: UIViewController {
     private func fetchAnalysis() {
         // If the caller already provided an analysis, don't refetch
         if let preloaded = preloadedResponse {
-            self.analysisResponse = preloaded
-            self.feedback = FeedbackMapper.toFeedback(preloaded)
+            let sanitized = sanitizedResponseForDisplay(preloaded)
+            self.analysisResponse = sanitized
+            self.feedback = FeedbackMapper.toFeedback(sanitized)
             self.isLoading = false
             self.collectionView.reloadData()
+            self.persistFeedbackToHistory(sanitized)
             handleFeedbackLifecycleUpdate()
             return
         }
@@ -198,14 +212,39 @@ class FeedbackCollectionViewController: UIViewController {
                 )
                 response = await feedbackEngine.analyze(input)
 
-            self.analysisResponse = response
-            self.feedback = FeedbackMapper.toFeedback(response)
+            let sanitized = self.sanitizedResponseForDisplay(response)
+            self.analysisResponse = sanitized
+            self.feedback = FeedbackMapper.toFeedback(sanitized)
             self.isLoading = false
             await MainActor.run {
                 self.collectionView.reloadData()
             }
-            self.persistFeedbackToHistory(response)
+            self.persistFeedbackToHistory(sanitized)
         }
+    }
+
+    private func sanitizedResponseForDisplay(_ response: SpeechAnalysisResponse) -> SpeechAnalysisResponse {
+        guard !effectiveAIFeedbackEnabled, response.coaching.llmCoaching != nil else {
+            return response
+        }
+
+        let coaching = SpeechCoaching(
+            scores: response.coaching.scores,
+            primaryIssue: response.coaching.primaryIssue,
+            primaryIssueTitle: response.coaching.primaryIssueTitle,
+            secondaryIssues: response.coaching.secondaryIssues,
+            strengths: response.coaching.strengths,
+            suggestions: response.coaching.suggestions,
+            evidence: response.coaching.evidence,
+            llmCoaching: nil
+        )
+
+        return SpeechAnalysisResponse(
+            transcript: response.transcript,
+            metrics: response.metrics,
+            coaching: coaching,
+            progress: response.progress
+        )
     }
 
     /// Persist the analysis result as a SessionFeedback on the most recent matching activity.
@@ -268,12 +307,45 @@ class FeedbackCollectionViewController: UIViewController {
     @objc private func doneTapped() {
         NotificationCenter.default.post(name: SessionProgressManager.progressDataUpdatedNotification, object: nil)
 
+        if sessionMode == .roleplay {
+            routeAfterRoleplayFeedbackDone()
+            return
+        }
+
         // If presented modally (e.g. from AI Call), dismiss the entire nav stack
         if presentingViewController != nil || navigationController?.presentingViewController != nil {
             dismiss(animated: true)
         } else {
             // Pushed on a navigation stack (e.g. from Jam session)
             navigationController?.popToRootViewController(animated: true)
+        }
+    }
+
+    private func routeAfterRoleplayFeedbackDone() {
+        let presenter = navigationController?.presentingViewController ?? presentingViewController
+
+        dismiss(animated: true) {
+            NotificationCenter.default.post(name: .roleplayFeedbackCompleted, object: nil)
+
+            // Preferred: return to roleplay root/info screen rather than reopening the last chat state.
+            if let roleplayChat = presenter as? RoleplayChatViewController {
+                roleplayChat.tabBarController?.tabBar.isHidden = false
+                roleplayChat.navigationController?.popToRootViewController(animated: true)
+                return
+            }
+
+            if let nav = presenter as? UINavigationController,
+               let roleplayChat = nav.topViewController as? RoleplayChatViewController {
+                roleplayChat.tabBarController?.tabBar.isHidden = false
+                roleplayChat.navigationController?.popToRootViewController(animated: true)
+                return
+            }
+
+            // Fallback: route user to Home tab if available.
+            if let tabBar = presenter?.tabBarController {
+                tabBar.tabBar.isHidden = false
+                tabBar.selectedIndex = 0
+            }
         }
     }
 
@@ -539,7 +611,7 @@ class FeedbackCollectionViewController: UIViewController {
         let stack = UIStackView()
         stack.axis = .vertical
         stack.alignment = .center
-        stack.spacing = 4
+        stack.spacing = 6
         stack.translatesAutoresizingMaskIntoConstraints = false
         cell.contentView.addSubview(stack)
         NSLayoutConstraint.activate([
@@ -558,9 +630,22 @@ class FeedbackCollectionViewController: UIViewController {
         titleLabel.text = title
         titleLabel.font = .systemFont(ofSize: 13, weight: .medium)
         titleLabel.textColor = .secondaryLabel
+        titleLabel.numberOfLines = 2
+        titleLabel.textAlignment = .center
+
+        let progressBar = UIProgressView(progressViewStyle: .default)
+        progressBar.translatesAutoresizingMaskIntoConstraints = false
+        progressBar.trackTintColor = AppColors.cardBorder
+        progressBar.progressTintColor = AppColors.primary
+        progressBar.progress = Float(max(0, min(100, value)) / 100.0)
 
         stack.addArrangedSubview(numLabel)
         stack.addArrangedSubview(titleLabel)
+        stack.addArrangedSubview(progressBar)
+
+        NSLayoutConstraint.activate([
+            progressBar.widthAnchor.constraint(equalTo: stack.widthAnchor, multiplier: 0.8)
+        ])
     }
 }
 
@@ -586,7 +671,7 @@ extension FeedbackCollectionViewController: UICollectionViewDataSource {
         case .loading:       return 0
         case .scores:        return 4   // overall, fluency, confidence, clarity
         case .metrics:       return 4   // WPM, fillers, pauses, duration
-        case .coaching:      return 1   // primary focus card only
+        case .coaching:      return effectiveAIFeedbackEnabled ? 2 : 1
         case .transcript:    return 3   // transcript, legend, totals
         case .progress:      return 1   // deltas card
         }
@@ -649,10 +734,16 @@ extension FeedbackCollectionViewController: UICollectionViewDataSource {
         case .coaching:
             let cell = cv.dequeueReusableCell(withReuseIdentifier: coachingCellId, for: indexPath)
             makeCard(cell)
-            let issue = coachingFocus(from: resp, feedback: fb)
-            let strengths = resp.coaching.strengths.prefix(2).joined(separator: " ")
-            let text = "🎯 Main focus\n\(issue)\n\n✅ What went well\n\(strengths)"
-            addLabel(to: cell, text: text, font: .systemFont(ofSize: 15, weight: .semibold), color: AppColors.primary)
+            if indexPath.item == 0 {
+                let issue = coachingFocus(from: resp, feedback: fb)
+                let strengths = resp.coaching.strengths.prefix(2).joined(separator: " ")
+                let text = "🎯 Main focus\n\(issue)\n\n✅ What went well\n\(strengths)"
+                addLabel(to: cell, text: text, font: .systemFont(ofSize: 15, weight: .semibold), color: AppColors.primary)
+            } else {
+                let suggestions = coachingSuggestions(from: resp, feedback: fb)
+                let text = suggestions.enumerated().map { "\($0.offset + 1). \($0.element)" }.joined(separator: "\n")
+                addLabel(to: cell, text: "🤖 AI Coach Suggestions\n\n\(text)", font: .systemFont(ofSize: 14, weight: .regular), color: AppColors.textPrimary)
+            }
             return cell
 
         // --- Transcript ---
@@ -725,7 +816,7 @@ extension FeedbackCollectionViewController: UICollectionViewDataSource {
 
         let mapped = FeedbackSection(rawValue: indexPath.section + 1) ?? .scores
         let titles: [FeedbackSection: String] = [
-            .scores: "Performance Snapshot", .metrics: "Speaking Signals", .coaching: "Action Plan",
+            .scores: "Performance Snapshot", .metrics: "Speaking Signals", .coaching: effectiveAIFeedbackEnabled ? "AI Action Plan" : "Action Plan",
             .transcript: "Marked Transcript",
             .progress: "Your Progress",
         ]

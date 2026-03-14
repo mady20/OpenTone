@@ -37,6 +37,9 @@ enum FeedbackMapper {
             mispronouncedWords: [],
             fluencyScore: response.coaching.scores.fluency,
             onTopicScore: response.coaching.scores.clarity,
+            confidenceScore: response.coaching.scores.confidence,
+            clarityScore: response.coaching.scores.clarity,
+            overallScore: response.coaching.scores.overall,
             pauses: response.metrics.pauses,
             summary: response.progress.weeklySummary,
             createdAt: Date()

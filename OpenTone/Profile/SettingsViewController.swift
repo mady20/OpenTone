@@ -8,6 +8,7 @@ final class SettingsViewController: UIViewController {
 
     private enum Section: Int, CaseIterable {
         case appearance
+        case feedback
         case account
         case about
         case actions
@@ -78,26 +79,46 @@ final class SettingsViewController: UIViewController {
             [
                 Row(title: "Theme", icon: "paintbrush.fill", iconTint: AppColors.primary, detail: themeName)
             ],
-            // Section 1 — Account
+            // Section 1 — Feedback
+            [
+                Row(title: "AI-Enabled Feedback", icon: "sparkles", iconTint: .systemPurple, detail: isAIFeedbackEnabled() ? "On" : "Off")
+            ],
+            // Section 2 — Account
             [
                 Row(title: "Email", icon: "envelope.fill", iconTint: .systemBlue, detail: user?.email ?? "—"),
                 Row(title: "Password", icon: "lock.fill", iconTint: .systemOrange, detail: "••••••••")
             ],
-            // Section 2 — About
+            // Section 3 — About
             [
                 Row(title: "Version", icon: "info.circle.fill", iconTint: .secondaryLabel, detail: appVersion),
                 Row(title: "Privacy Policy", icon: "hand.raised.fill", iconTint: .systemIndigo),
                 Row(title: "Terms of Service", icon: "doc.text.fill", iconTint: .systemIndigo)
             ],
-            // Section 3 — Actions
+            // Section 4 — Actions
             [
                 Row(title: "Log Out", icon: "rectangle.portrait.and.arrow.right", iconTint: .systemRed, isDestructive: true)
             ],
-            // Section 4 — Danger Zone
+            // Section 5 — Danger Zone
             [
                 Row(title: "Delete Account", icon: "trash.fill", iconTint: .systemRed, isDestructive: true)
             ]
         ]
+    }
+
+    private func isAIFeedbackEnabled() -> Bool {
+        SessionManager.shared.currentUser?.aiFeedbackEnabled ?? false
+    }
+
+    private func setAIFeedbackEnabled(_ enabled: Bool) {
+        guard var user = SessionManager.shared.currentUser else { return }
+        user.aiFeedbackEnabled = enabled
+        SessionManager.shared.updateSessionUser(user)
+        buildSections()
+        tableView.reloadData()
+    }
+
+    @objc private func aiFeedbackSwitchChanged(_ sender: UISwitch) {
+        setAIFeedbackEnabled(sender.isOn)
     }
 
     private var appVersion: String {
@@ -395,6 +416,7 @@ extension SettingsViewController: UITableViewDataSource {
         guard let s = Section(rawValue: section) else { return nil }
         switch s {
         case .appearance: return "Appearance"
+        case .feedback:   return "Feedback"
         case .account:    return "Account"
         case .about:      return "About"
         case .actions:    return nil
@@ -421,7 +443,18 @@ extension SettingsViewController: UITableViewDataSource {
 
         cell.contentConfiguration = content
         cell.backgroundColor = AppColors.cardBackground
-        cell.selectionStyle = row.isDestructive || row.detail == nil || indexPath.section == 0 ? .default : .none
+        cell.selectionStyle = row.isDestructive || row.detail == nil || indexPath.section == Section.appearance.rawValue ? .default : .none
+
+        if Section(rawValue: indexPath.section) == .feedback, indexPath.row == 0 {
+            let toggle = UISwitch()
+            toggle.isOn = isAIFeedbackEnabled()
+            toggle.addTarget(self, action: #selector(aiFeedbackSwitchChanged(_:)), for: .valueChanged)
+            cell.accessoryView = toggle
+            cell.accessoryType = .none
+            cell.selectionStyle = .none
+            return cell
+        }
+        cell.accessoryView = nil
 
         // Show disclosure for actionable rows
         let section = Section(rawValue: indexPath.section)
@@ -447,6 +480,9 @@ extension SettingsViewController: UITableViewDelegate {
         switch section {
         case .appearance:
             showThemePicker()
+
+        case .feedback:
+            break
 
         case .account:
             showEditField(for: indexPath.row)

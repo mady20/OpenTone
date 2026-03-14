@@ -2,7 +2,7 @@ import UIKit
 
 class HistoryViewController: UIViewController {
 
-    @IBOutlet weak var tableView: UITableView!
+    private let tableView = UITableView(frame: .zero, style: .plain)
     var items: [HistoryItem] = []
     var selectedDate: Date = Date()
 
@@ -13,6 +13,8 @@ class HistoryViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+
+        setupLayout()
 
         view.backgroundColor = AppColors.screenBackground
         tableView.backgroundColor = AppColors.screenBackground
@@ -34,6 +36,19 @@ class HistoryViewController: UIViewController {
         tableView.reloadData()
 
         fetchProgressData()
+    }
+
+    private func setupLayout() {
+        tableView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(tableView)
+        NSLayoutConstraint.activate([
+            tableView.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor),
+            tableView.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor),
+            tableView.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor),
+            tableView.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor)
+        ])
+
+        tableView.register(HistoryTableViewCell.self, forCellReuseIdentifier: "HistoryCell")
     }
 
     override func viewDidLayoutSubviews() {
@@ -130,6 +145,12 @@ class HistoryViewController: UIViewController {
             navigationController?.pushViewController(startVC, animated: true)
         }
     }
+
+    private func openFeedbackDetail(for item: HistoryItem) {
+        guard let feedback = item.feedback else { return }
+        let detailVC = SessionFeedbackDetailViewController(feedback: feedback, sessionTitle: item.title)
+        navigationController?.pushViewController(detailVC, animated: true)
+    }
 }
 
 extension HistoryViewController: UITableViewDataSource, UITableViewDelegate {
@@ -150,7 +171,9 @@ extension HistoryViewController: UITableViewDataSource, UITableViewDelegate {
         ) as! HistoryTableViewCell
 
         cell.configure(with: item)
-        cell.selectionStyle = item.scenarioId != nil ? .default : .none
+        let opensFeedbackDetail = item.isCompleted && item.feedback != nil
+        let canResumeRoleplay = item.scenarioId != nil
+        cell.selectionStyle = (opensFeedbackDetail || canResumeRoleplay) ? .default : .none
         cell.backgroundColor = .clear
         return cell
     }
@@ -159,7 +182,9 @@ extension HistoryViewController: UITableViewDataSource, UITableViewDelegate {
         tableView.deselectRow(at: indexPath, animated: true)
 
         let item = filteredItems[indexPath.row]
-        if let scenarioId = item.scenarioId {
+        if item.isCompleted, item.feedback != nil {
+            openFeedbackDetail(for: item)
+        } else if let scenarioId = item.scenarioId {
             resumeRoleplaySession(scenarioId: scenarioId)
         }
     }

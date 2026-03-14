@@ -59,8 +59,9 @@ final class FeedbackEngineCoordinator: FeedbackEngine {
 
 enum FeedbackEngineFactory {
 
-    static func makeDefault() -> FeedbackEngine {
+    static func makeDefault(aiFeedbackEnabled: Bool = true) -> FeedbackEngine {
         let _ = FeedbackEnginePolicy.fromConfig()
-        return FeedbackEngineCoordinator(coreEngine: OnDeviceFeedbackEngine(), remoteProviders: [])
+        let providers: [RemoteFeedbackProvider] = aiFeedbackEnabled ? [] : []
+        return FeedbackEngineCoordinator(coreEngine: OnDeviceFeedbackEngine(), remoteProviders: providers)
     }
 }

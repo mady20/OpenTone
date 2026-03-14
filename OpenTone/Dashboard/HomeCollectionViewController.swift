@@ -224,6 +224,24 @@ class HomeCollectionViewController: UICollectionViewController {
         }
 
         let completedCount = HistoryDataModel.shared.getAllActivities().count
+        let growthSummary: String? = {
+            let trend = HistoryDataModel.shared.feedbackTrendPoints(limit: 6, smoothingWindow: 3)
+            guard let first = trend.first, let last = trend.last, trend.count >= 2 else {
+                return nil
+            }
+
+            let overallDelta = last.overall - first.overall
+            let confidenceDelta = last.confidence - first.confidence
+            let arrow = overallDelta >= 0 ? "↑" : "↓"
+
+            return String(
+                format: "%@ %.0f overall • %@ %.0f confidence",
+                arrow,
+                abs(overallDelta),
+                confidenceDelta >= 0 ? "↑" : "↓",
+                abs(confidenceDelta)
+            )
+        }()
 
         return ProgressCellData(
             streakDays: streakDays,
@@ -232,6 +250,7 @@ class HomeCollectionViewController: UICollectionViewController {
             weeklyMinutes: weeklyMinutes,
             speechProfile: cachedSpeechProfile,
             lastWpmDelta: lastWpmDelta,
+            growthSummary: growthSummary,
             hasCompletedSessions: completedCount > 0
         )
     }
@@ -242,10 +261,9 @@ class HomeCollectionViewController: UICollectionViewController {
     }
 
     @objc private func openStreak() {
-        let storyboard = UIStoryboard(name: "streak-progess", bundle: nil)
-        let vc = storyboard.instantiateViewController(withIdentifier: "Streak")
-      
-            present(vc, animated: true)
+        let vc = UINavigationController(rootViewController: StreakViewController())
+        vc.modalPresentationStyle = .fullScreen
+        present(vc, animated: true)
     }
 
     // MARK: - Resume Saved JAM

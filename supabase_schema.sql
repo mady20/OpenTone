@@ -26,8 +26,11 @@ CREATE TABLE IF NOT EXISTS users (
   streak_last_active  TIMESTAMPTZ,
   last_seen     TIMESTAMPTZ,
   friend_ids    UUID[] DEFAULT '{}',
+  ai_feedback_enabled BOOLEAN NOT NULL DEFAULT false,
   created_at    TIMESTAMPTZ DEFAULT now()
 );
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_feedback_enabled BOOLEAN NOT NULL DEFAULT false;
 
 -- 2. ACTIVITIES TABLE (history)
 CREATE TABLE IF NOT EXISTS activities (

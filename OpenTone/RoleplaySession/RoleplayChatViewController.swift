@@ -119,6 +119,7 @@ class RoleplayChatViewController: UIViewController {
     private var isProcessingResponse = false
     private var isMuted = false
     private var isSpeaking = false
+    private var roleplayFeedbackObserver: NSObjectProtocol?
 
     private enum State {
         case idle
@@ -193,6 +194,14 @@ class RoleplayChatViewController: UIViewController {
 
         AudioManager.shared.onAudioBuffer = { [weak self] buffer in
             self?.processAudio(buffer)
+        }
+
+        roleplayFeedbackObserver = NotificationCenter.default.addObserver(
+            forName: .roleplayFeedbackCompleted,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.handleRoleplayFeedbackCompleted()
         }
     }
 
@@ -480,6 +489,20 @@ class RoleplayChatViewController: UIViewController {
 
     deinit {
         displayLink?.invalidate()
+        if let roleplayFeedbackObserver {
+            NotificationCenter.default.removeObserver(roleplayFeedbackObserver)
+        }
+    }
+
+    private func handleRoleplayFeedbackCompleted() {
+        RoleplaySessionDataModel.shared.cancelSession()
+        tabBarController?.tabBar.isHidden = false
+
+        if let nav = navigationController {
+            nav.popToRootViewController(animated: true)
+        } else {
+            tabBarController?.selectedIndex = 0
+        }
     }
 
     // MARK: - Backend Chat Roleplay
@@ -989,7 +1012,8 @@ class RoleplayChatViewController: UIViewController {
 
         Task {
             let _ = lastAudioData
-            let engine = FeedbackEngineFactory.makeDefault()
+            let aiFeedbackEnabled = UserDataModel.shared.getCurrentUser()?.aiFeedbackEnabled ?? false
+            let engine = FeedbackEngineFactory.makeDefault(aiFeedbackEnabled: aiFeedbackEnabled)
             let response = await engine.analyze(
                 FeedbackEngineInput(
                     transcript: userTranscript,
@@ -1011,6 +1035,7 @@ class RoleplayChatViewController: UIViewController {
                 feedbackVC.userId = userId
                 feedbackVC.sessionMode = .roleplay
                 feedbackVC.activityType = .roleplay
+                feedbackVC.aiFeedbackEnabled = aiFeedbackEnabled
                 feedbackVC.preloadedResponse = response
 
                 let nav = UINavigationController(rootViewController: feedbackVC)

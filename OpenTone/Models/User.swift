@@ -27,6 +27,7 @@ struct User: Identifiable, Codable, CustomStringConvertible{
     var jamSessionIDs: [UUID]
     var friendsIDs: [UUID]
     var createdAt: Date?
+    var aiFeedbackEnabled: Bool
     
     init(
         name: String,
@@ -47,7 +48,8 @@ struct User: Identifiable, Codable, CustomStringConvertible{
         jamSessionIDs: [UUID] = [],
         friends: [UUID] = [],
         createdAt: Date? = nil,
-        goal: Int = 0
+        goal: Int = 0,
+        aiFeedbackEnabled: Bool = false
     ) {
         self.id = UUID()
         self.name = name
@@ -69,6 +71,7 @@ struct User: Identifiable, Codable, CustomStringConvertible{
         self.friendsIDs = friends
         self.createdAt = createdAt
         self.goal = goal
+        self.aiFeedbackEnabled = aiFeedbackEnabled
     }
     
     var isOnline: Bool {
@@ -96,6 +99,8 @@ struct User: Identifiable, Codable, CustomStringConvertible{
         parts.append("jam sessions: \(jamSessionIDs.count)")
         parts.append("friends: \(friendsIDs.count)")
         parts.append("created at: \(createdAt?.description ?? "N/A")")
+        let aiFeedbackText = aiFeedbackEnabled ? "enabled" : "disabled"
+        parts.append("ai feedback: \(aiFeedbackText)")
         return parts.joined(separator: "\n")
     }
 

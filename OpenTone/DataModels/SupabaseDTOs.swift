@@ -32,6 +32,7 @@ struct UserRow: Codable {
     var streakLastActive: Date?
     var lastSeen: Date?
     var friendIds: [UUID]?
+    var aiFeedbackEnabled: Bool?
     var createdAt: Date?
 
     enum CodingKeys: String, CodingKey {
@@ -48,6 +49,7 @@ struct UserRow: Codable {
         case streakLastActive = "streak_last_active"
         case lastSeen       = "last_seen"
         case friendIds      = "friend_ids"
+        case aiFeedbackEnabled = "ai_feedback_enabled"
         case createdAt      = "created_at"
     }
 }
@@ -78,6 +80,7 @@ extension UserRow {
         self.streakLastActive = user.streak?.lastActiveDate
         self.lastSeen = user.lastSeen
         self.friendIds = user.friendsIDs
+        self.aiFeedbackEnabled = user.aiFeedbackEnabled
         self.createdAt = nil // server-generated
     }
 
@@ -109,7 +112,8 @@ extension UserRow {
             jamSessionIDs: [],   // not stored in users table; counts derived from activities
             friends: friendIds ?? [],
             createdAt: createdAt,
-            goal: goal
+            goal: goal,
+            aiFeedbackEnabled: aiFeedbackEnabled ?? false
         )
         // Override the auto-generated UUID with the one from the database
         user.setID(id)

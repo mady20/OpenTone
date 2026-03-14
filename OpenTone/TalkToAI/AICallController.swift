@@ -815,7 +815,8 @@ final class AICallController: UIViewController {
         // Analyze feedback locally and optionally enhance wording with remote providers.
         currentState = .processing
         Task {
-            let engine = FeedbackEngineFactory.makeDefault()
+            let aiFeedbackEnabled = UserDataModel.shared.getCurrentUser()?.aiFeedbackEnabled ?? false
+            let engine = FeedbackEngineFactory.makeDefault(aiFeedbackEnabled: aiFeedbackEnabled)
             let response = await engine.analyze(
                 FeedbackEngineInput(
                     transcript: fullTranscript,
@@ -856,6 +857,7 @@ final class AICallController: UIViewController {
                 feedbackVC.userId = userId.uuidString
                 feedbackVC.sessionMode = .aiCall
                 feedbackVC.activityType = .aiCall
+                feedbackVC.aiFeedbackEnabled = aiFeedbackEnabled
                 feedbackVC.preloadedResponse = response
 
                 let nav = UINavigationController(rootViewController: feedbackVC)
@@ -893,6 +895,9 @@ final class AICallController: UIViewController {
             mispronouncedWords: [],
             fluencyScore: fluency,
             onTopicScore: max(50, fluency - 5),
+            confidenceScore: nil,
+            clarityScore: nil,
+            overallScore: fluency,
             pauses: totalPauses,
             summary: "Session completed (\(turnSummaries.count) turns, \(Int(wpm)) WPM). Feedback computed locally.",
             createdAt: Date()

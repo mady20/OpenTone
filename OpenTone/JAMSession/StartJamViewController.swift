@@ -404,6 +404,7 @@ extension StartJamViewController: TimerManagerDelegate {
         }
           
         let vc = FeedbackCollectionViewController()
+        let aiFeedbackEnabled = UserDataModel.shared.getCurrentUser()?.aiFeedbackEnabled ?? false
         vc.transcript       = nil
         vc.topic            = session.topic
         vc.speakingDuration = speakingDuration
@@ -411,6 +412,8 @@ extension StartJamViewController: TimerManagerDelegate {
         vc.userId           = UserDataModel.shared.getCurrentUser()?.id.uuidString ?? "demo"
         vc.sessionMode      = .jam
         vc.activityType     = .jam
+        vc.aiFeedbackEnabled = aiFeedbackEnabled
+        vc.feedbackEngine = FeedbackEngineFactory.makeDefault(aiFeedbackEnabled: aiFeedbackEnabled)
         
         // Pass the raw local audio file to the feedback screen to unlock Whisper timestamps
         if let localURL = AudioManager.shared.lastRecordingURL {

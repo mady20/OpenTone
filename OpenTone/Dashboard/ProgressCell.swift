@@ -11,6 +11,8 @@ struct ProgressCellData {
     var speechProfile: UserSpeechProfile? = nil
     /// Optional WPM delta from last session
     var lastWpmDelta: Double? = nil
+    /// Optional growth summary from recent scored sessions
+    var growthSummary: String? = nil
     /// True only when the user has completed at least one session (jam, roleplay, or call)
     var hasCompletedSessions: Bool = false
 }
@@ -123,6 +125,7 @@ final class ProgressCell: UICollectionViewCell {
         let l = UILabel()
         l.font = .systemFont(ofSize: 11, weight: .regular)
         l.textAlignment = .right
+        l.numberOfLines = 2
         l.translatesAutoresizingMaskIntoConstraints = false
         l.isHidden = true
         return l
@@ -438,13 +441,27 @@ final class ProgressCell: UICollectionViewCell {
             coachingScoreLabel.isHidden = true
         }
 
-        if data.hasCompletedSessions,
-           let delta = data.lastWpmDelta, abs(delta) >= 1 {
-            let arrow = delta > 0 ? "↑" : "↓"
-            lastDeltaLabel.text = "\(arrow) \(abs(Int(delta))) WPM since last session"
-            lastDeltaLabel.isHidden = false
+        if data.hasCompletedSessions {
+            var lines: [String] = []
+
+            if let summary = data.growthSummary, !summary.isEmpty {
+                lines.append(summary)
+            }
+
+            if let delta = data.lastWpmDelta, abs(delta) >= 1 {
+                let arrow = delta > 0 ? "↑" : "↓"
+                lines.append("\(arrow) \(abs(Int(delta))) WPM since last session")
+            }
+
+            if !lines.isEmpty {
+                lastDeltaLabel.text = lines.joined(separator: "\n")
+                lastDeltaLabel.isHidden = false
+            } else {
+                lastDeltaLabel.isHidden = true
+            }
         } else {
             lastDeltaLabel.isHidden = true
+            lastDeltaLabel.text = nil
         }
 
         // For brand-new users, show a welcome hint below the greeting
