@@ -786,13 +786,6 @@ final class AICallController: UIViewController {
             duration: duration
         )
 
-        // Mark session completed for streak/XP tracking
-        SessionProgressManager.shared.markCompleted(
-            .aiCall,
-            topic: "Open Conversation",
-            actualDurationMinutes: max(1, Int(ceil(duration / 60.0)))
-        )
-
         // Build the full user transcript from preserved user turns.
         let fullTranscript = userTranscriptParts.joined(separator: " ")
 

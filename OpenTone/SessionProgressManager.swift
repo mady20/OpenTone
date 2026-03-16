@@ -48,6 +48,10 @@ class SessionProgressManager {
     func markCompleted(_ type: SessionType, topic: String, actualDurationMinutes: Int? = nil) {
 
         let finalDuration = actualDurationMinutes ?? type.durationInMinutes
+        guard finalDuration > 0 else {
+            print("[SessionProgressManager] Skipping completion: invalid duration \(finalDuration).")
+            return
+        }
 
         StreakDataModel.shared.logSession(
             title: type.title,

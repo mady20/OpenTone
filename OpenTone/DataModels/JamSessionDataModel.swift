@@ -321,8 +321,6 @@ class JamSessionDataModel {
             isCompleted: true
         )
 
-        SessionProgressManager.shared.markCompleted(.twoMinJam, topic: session.topic, actualDurationMinutes: durationMinutes)
-
         activeSession = nil
     }
 

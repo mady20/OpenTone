@@ -74,8 +74,13 @@ final class ProgressCell: UICollectionViewCell {
 
     private let percentLabel: UILabel = {
         let l = UILabel()
-        l.font = .systemFont(ofSize: 26, weight: .heavy)
+        l.font = .systemFont(ofSize: 24, weight: .heavy)
         l.textAlignment = .center
+        l.numberOfLines = 1
+        l.adjustsFontSizeToFitWidth = true
+        l.minimumScaleFactor = 0.55
+        l.lineBreakMode = .byClipping
+        l.setContentCompressionResistancePriority(.required, for: .horizontal)
         l.translatesAutoresizingMaskIntoConstraints = false
         return l
     }()
@@ -84,6 +89,10 @@ final class ProgressCell: UICollectionViewCell {
         let l = UILabel()
         l.font = .systemFont(ofSize: 11, weight: .medium)
         l.textAlignment = .center
+        l.numberOfLines = 1
+        l.adjustsFontSizeToFitWidth = true
+        l.minimumScaleFactor = 0.8
+        l.lineBreakMode = .byTruncatingTail
         l.translatesAutoresizingMaskIntoConstraints = false
         return l
     }()
@@ -141,6 +150,10 @@ final class ProgressCell: UICollectionViewCell {
     private var storedBarMax: Int = 1
     private var currentRingProgress: CGFloat = 0
 
+    private let ringSize: CGFloat = 100
+    private let ringInnerSafeWidthRatio: CGFloat = 0.62
+    private let ringSubLabelSafeWidthRatio: CGFloat = 0.72
+
     // MARK: - Init
 
     override init(frame: CGRect) {
@@ -188,8 +201,6 @@ final class ProgressCell: UICollectionViewCell {
         contentView.addSubview(weekStack)
         contentView.addSubview(seeProgressButton)
 
-        let ringSize: CGFloat = 100
-
         NSLayoutConstraint.activate([
             // Streak badge
             streakContainer.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 16),
@@ -215,9 +226,11 @@ final class ProgressCell: UICollectionViewCell {
 
             percentLabel.centerXAnchor.constraint(equalTo: ringContainer.centerXAnchor),
             percentLabel.centerYAnchor.constraint(equalTo: ringContainer.centerYAnchor, constant: -8),
+            percentLabel.widthAnchor.constraint(lessThanOrEqualTo: ringContainer.widthAnchor, multiplier: ringInnerSafeWidthRatio),
 
             goalSubLabel.centerXAnchor.constraint(equalTo: ringContainer.centerXAnchor),
             goalSubLabel.topAnchor.constraint(equalTo: percentLabel.bottomAnchor, constant: 0),
+            goalSubLabel.widthAnchor.constraint(lessThanOrEqualTo: ringContainer.widthAnchor, multiplier: ringSubLabelSafeWidthRatio),
 
             // Weekly bars
             weekStack.leadingAnchor.constraint(equalTo: ringContainer.trailingAnchor, constant: 16),
@@ -404,12 +417,12 @@ final class ProgressCell: UICollectionViewCell {
         // Ring
         if data.dailyGoalMinutes <= 0 {
             animateRingProgress(to: 0)
-            percentLabel.text = "—"
+            setPercentText("—")
             goalSubLabel.text = "No schedule"
         } else {
             let pct = min(Double(data.todayMinutes) / Double(data.dailyGoalMinutes), 1.0)
             animateRingProgress(to: CGFloat(pct))
-            percentLabel.text = "\(Int(pct * 100))%"
+            setPercentText("\(Int(pct * 100))%")
 
             let remaining = max(0, data.dailyGoalMinutes - data.todayMinutes)
             goalSubLabel.text = "\(remaining) min left"
@@ -519,6 +532,20 @@ final class ProgressCell: UICollectionViewCell {
     private func mondayBasedWeekdayIndex() -> Int {
         let weekday = Calendar.current.component(.weekday, from: Date())
         return (weekday + 5) % 7
+    }
+
+    private func setPercentText(_ text: String) {
+        let numericPercentChars = CharacterSet(charactersIn: "0123456789%")
+        if text.rangeOfCharacter(from: numericPercentChars.inverted) == nil, text.contains("%") {
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: UIFont.monospacedDigitSystemFont(ofSize: 24, weight: .heavy),
+                .foregroundColor: AppColors.textPrimary
+            ]
+            percentLabel.attributedText = NSAttributedString(string: text, attributes: attrs)
+        } else {
+            percentLabel.attributedText = nil
+            percentLabel.text = text
+        }
     }
 
     @objc private func seeProgressTapped() {

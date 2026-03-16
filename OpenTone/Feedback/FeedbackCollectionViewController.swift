@@ -59,6 +59,8 @@ class FeedbackCollectionViewController: UIViewController {
     private var isLoading = true
     private var errorMessage: String?
     private var hasPresentedDailyGoalAchievement = false
+    private var hasCommittedSessionProgress = false
+    private var shouldCommitProgressWhenVisible = false
 
     private var collectionView: UICollectionView!
 
@@ -82,6 +84,11 @@ class FeedbackCollectionViewController: UIViewController {
 
         configureCollectionView()
         fetchAnalysis()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        commitSessionProgressIfPossible()
     }
 
     // MARK: - Layout
@@ -178,7 +185,7 @@ class FeedbackCollectionViewController: UIViewController {
             self.isLoading = false
             self.collectionView.reloadData()
             self.persistFeedbackToHistory(sanitized)
-            handleFeedbackLifecycleUpdate()
+            prepareSessionProgressCommit()
             return
         }
 
@@ -220,7 +227,75 @@ class FeedbackCollectionViewController: UIViewController {
                 self.collectionView.reloadData()
             }
             self.persistFeedbackToHistory(sanitized)
+            self.prepareSessionProgressCommit()
         }
+    }
+
+    private func prepareSessionProgressCommit() {
+        shouldCommitProgressWhenVisible = true
+        DispatchQueue.main.async { [weak self] in
+            self?.commitSessionProgressIfPossible()
+        }
+    }
+
+    private func commitSessionProgressIfPossible() {
+        guard shouldCommitProgressWhenVisible, !hasCommittedSessionProgress else { return }
+        guard isViewLoaded, view.window != nil else { return }
+
+        let durationSeconds = speakingDuration
+        guard durationSeconds >= minimumDurationSeconds(for: sessionMode) else {
+            print("[Feedback] Skipping progress commit: duration below threshold.")
+            shouldCommitProgressWhenVisible = false
+            return
+        }
+
+        guard hasActivityEvidence() else {
+            print("[Feedback] Skipping progress commit: no activity evidence.")
+            shouldCommitProgressWhenVisible = false
+            return
+        }
+
+        let minutes = max(1, Int(ceil(durationSeconds / 60.0)))
+        let trimmedTopic = topic?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let resolvedTopic = trimmedTopic.isEmpty ? sessionProgressType(for: sessionMode).title : trimmedTopic
+        SessionProgressManager.shared.markCompleted(
+            sessionProgressType(for: sessionMode),
+            topic: resolvedTopic,
+            actualDurationMinutes: minutes
+        )
+
+        hasCommittedSessionProgress = true
+        shouldCommitProgressWhenVisible = false
+    }
+
+    private func minimumDurationSeconds(for mode: FeedbackSessionMode) -> Double {
+        switch mode {
+        case .aiCall, .roleplay:
+            return 30
+        case .jam:
+            return 20
+        }
+    }
+
+    private func sessionProgressType(for mode: FeedbackSessionMode) -> SessionProgressManager.SessionType {
+        switch mode {
+        case .aiCall:
+            return .aiCall
+        case .jam:
+            return .twoMinJam
+        case .roleplay:
+            return .roleplay
+        }
+    }
+
+    private func hasActivityEvidence() -> Bool {
+        let directTranscript = (transcript ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !directTranscript.isEmpty {
+            return true
+        }
+
+        let analyzedTranscript = (analysisResponse?.transcript ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return !analyzedTranscript.isEmpty
     }
 
     private func sanitizedResponseForDisplay(_ response: SpeechAnalysisResponse) -> SpeechAnalysisResponse {

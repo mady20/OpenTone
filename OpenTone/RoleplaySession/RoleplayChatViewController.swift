@@ -814,9 +814,6 @@ class RoleplayChatViewController: UIViewController {
         
         // Calculate actual duration in minutes
         let seconds = session.endedAt?.timeIntervalSince(session.startedAt) ?? 0
-        let actualMinutes = max(1, Int(ceil(seconds / 60.0)))
-
-        SessionProgressManager.shared.markCompleted(.roleplay, topic: scenario.title, actualDurationMinutes: actualMinutes)
 
         // Build user transcript from conversation history
         let userTranscript = llmHistory
@@ -872,9 +869,6 @@ class RoleplayChatViewController: UIViewController {
             
             // Calculate actual duration in minutes
             let seconds = session.endedAt?.timeIntervalSince(session.startedAt) ?? 0
-            let actualMinutes = max(1, Int(ceil(seconds / 60.0)))
-
-            SessionProgressManager.shared.markCompleted(.roleplay, topic: scenario.title, actualDurationMinutes: actualMinutes)
 
             // Build user transcript from the scripted user messages
             let userTranscript = messages
