@@ -1,15 +1,8 @@
 import UIKit
 
-protocol SuggestionCellDelegate: AnyObject {
-    func didTapSuggestion(_ suggestion: String)
-}
-
 class SuggestionCell: UITableViewCell {
 
-    weak var delegate: SuggestionCellDelegate?
-
     private let stackView = UIStackView()
-    private var suggestionButtons: [UIButton] = []
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
@@ -25,7 +18,6 @@ class SuggestionCell: UITableViewCell {
         super.awakeFromNib()
         backgroundColor = .clear
         selectionStyle = .none
-        // Stack is already set up from init(coder:)
     }
 
     private func setupStack() {
@@ -48,63 +40,56 @@ class SuggestionCell: UITableViewCell {
 
     override func prepareForReuse() {
         super.prepareForReuse()
-        for button in suggestionButtons {
-            button.removeFromSuperview()
+        for view in stackView.arrangedSubviews {
+            view.removeFromSuperview()
         }
-        suggestionButtons.removeAll()
     }
 
     func configure(_ suggestions: [String]) {
-        // Clear old buttons
-        for button in suggestionButtons {
-            button.removeFromSuperview()
+        for view in stackView.arrangedSubviews {
+            view.removeFromSuperview()
         }
-        suggestionButtons.removeAll()
 
         for suggestion in suggestions {
-            let button = makeSuggestionButton(title: suggestion)
-            stackView.addArrangedSubview(button)
-            suggestionButtons.append(button)
+            let view = makeHintView(title: suggestion)
+            stackView.addArrangedSubview(view)
         }
     }
 
-    private func makeSuggestionButton(title: String) -> UIButton {
-        let button = UIButton(type: .system)
-        var config = UIButton.Configuration.plain()
-        config.contentInsets = NSDirectionalEdgeInsets(top: 12, leading: 20, bottom: 12, trailing: 20)
-        button.configuration = config
-        button.setTitle(title, for: .normal)
-        button.titleLabel?.numberOfLines = 0
-        button.titleLabel?.textAlignment = .center
-        button.titleLabel?.font = .systemFont(ofSize: 16, weight: .medium)
-        button.setTitleColor(AppColors.primary, for: .normal)
-        button.backgroundColor = AppColors.primaryLight
-        button.layer.cornerRadius = 18
-        button.layer.borderWidth = 1
-        button.layer.borderColor = AppColors.primary.withAlphaComponent(0.25).cgColor
-        button.clipsToBounds = true
-        button.translatesAutoresizingMaskIntoConstraints = false
-        button.addTarget(self, action: #selector(suggestionTapped(_:)), for: .touchUpInside)
+    private func makeHintView(title: String) -> UIView {
+        let container = UIView()
+        container.translatesAutoresizingMaskIntoConstraints = false
+        container.backgroundColor = AppColors.primaryLight.withAlphaComponent(0.6)
+        container.layer.cornerRadius = 18
+        container.layer.borderWidth = 1
+        container.layer.borderColor = AppColors.primary.withAlphaComponent(0.25).cgColor
+        container.clipsToBounds = true
 
         // Match chat bubble corner style — round top-left, top-right, bottom-left
-        button.layer.maskedCorners = [
+        container.layer.maskedCorners = [
             .layerMinXMinYCorner,  // top-left
             .layerMaxXMinYCorner,  // top-right
             .layerMinXMaxYCorner   // bottom-left
         ]
 
-        // Max width so long text wraps
-        button.widthAnchor.constraint(lessThanOrEqualToConstant: 300).isActive = true
+        let label = UILabel()
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.text = title
+        label.numberOfLines = 0
+        label.textAlignment = .center
+        label.font = .systemFont(ofSize: 15, weight: .regular)
+        label.textColor = AppColors.primary
 
-        return button
-    }
+        container.addSubview(label)
 
-    @objc private func suggestionTapped(_ sender: UIButton) {
-        guard let text = sender.title(for: .normal) else { return }
-        for button in suggestionButtons {
-            button.isEnabled = false
-            button.alpha = 0.5
-        }
-        delegate?.didTapSuggestion(text)
+        NSLayoutConstraint.activate([
+            label.topAnchor.constraint(equalTo: container.topAnchor, constant: 12),
+            label.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -12),
+            label.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+            label.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -16),
+            container.widthAnchor.constraint(lessThanOrEqualToConstant: 300)
+        ])
+
+        return container
     }
 }

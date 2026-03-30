@@ -90,12 +90,6 @@ struct ChatMessage {
     let suggestions: [String]?
 }
 
-extension RoleplayChatViewController: SuggestionCellDelegate {
-
-    func didTapSuggestion(_ suggestion: String) {
-        userResponded(suggestion)
-    }
-}
 
 
 
@@ -607,7 +601,11 @@ class RoleplayChatViewController: UIViewController {
         var messageText = response
         var suggestions: [String] = []
 
-        if let range = response.range(of: "SUGGESTIONS:") {
+        let pattern = "(?i)\\*?\\*?SUGGESTIONS\\*?\\*?:\\s*"
+        if let regex = try? NSRegularExpression(pattern: pattern, options: []),
+           let match = regex.firstMatch(in: response, options: [], range: NSRange(location: 0, length: response.utf16.count)),
+           let range = Range(match.range, in: response) {
+            
             messageText = String(response[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
             
             let jsonString = String(response[range.upperBound...])
@@ -837,9 +835,20 @@ class RoleplayChatViewController: UIViewController {
 
         let isCorrect = expected.contains { option in
             let normalizedOption = normalize(option)
-            let inputWords = Set(normalizedInput.split(separator: " "))
-            let optionWords = Set(normalizedOption.split(separator: " "))
-            return inputWords.intersection(optionWords).count >= 2
+            if normalizedInput == normalizedOption { return true }
+            
+            let inputWords = normalizedInput.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+            let optionWords = normalizedOption.components(separatedBy: .whitespaces).filter { !$0.isEmpty }
+            guard !optionWords.isEmpty else { return false }
+            
+            // Require 80% of the expected words to be present, meaning the user reasonably said the sentence
+            let intersection = Set(inputWords).intersection(Set(optionWords))
+            let matchRatio = Double(intersection.count) / Double(optionWords.count)
+            
+            // Also ensure they didn't just string 50 random words together (limit extra words)
+            let extraWordsRatio = Double(inputWords.count) / Double(optionWords.count)
+            
+            return matchRatio >= 0.8 && extraWordsRatio <= 1.5
         }
 
         if isCorrect {
@@ -1099,12 +1108,13 @@ extension RoleplayChatViewController: UITableViewDataSource, UITableViewDelegate
                 withIdentifier: "SuggestionCell",
                 for: indexPath
             ) as! SuggestionCell
-            cell.delegate = self
             cell.configure(msg.suggestions ?? [])
             return cell
         }
     }
-    
+}
+
+extension RoleplayChatViewController {
     private func calculateScore() -> Int {
         let penalty = totalWrongAttempts * 5
         return max(100 - penalty, 60)
