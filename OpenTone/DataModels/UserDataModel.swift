@@ -76,6 +76,9 @@ final class UserDataModel {
     /// Registers credentials in Supabase Auth, then upserts a profile row in `users`.
     func registerWithSupabaseAuth(name: String, email: String, password: String) async -> User? {
         do {
+            // Cache the suggested name locally in case email confirmation is required.
+            UserDefaults.standard.set(name, forKey: "pending_signup_name_\(email)")
+            
             // Attempt signup
             try await SupabaseAuth.signUp(email: email, password: password)
             
@@ -111,6 +114,10 @@ final class UserDataModel {
     /// When email confirmation is required, returns success but with a confirmation message
     func registerWithSupabaseAuthAndError(name: String, email: String, password: String) async -> (user: User?, error: String?) {
         do {
+            // Cache the suggested name locally in case email confirmation is required.
+            // When they authenticate later, we can read this back to properly name their profile.
+            UserDefaults.standard.set(name, forKey: "pending_signup_name_\(email)")
+            
             // Attempt signup
             try await SupabaseAuth.signUp(email: email, password: password)
             
@@ -205,11 +212,17 @@ final class UserDataModel {
     func authenticate(email: String, password: String) async -> User? {
         do {
             let authUser = try await SupabaseAuth.signIn(email: email, password: password)
+            let pendingName = UserDefaults.standard.string(forKey: "pending_signup_name_\(email)")
+            
             let user = try await fetchOrCreateProfile(
                 userID: authUser.id,
                 email: authUser.email ?? email,
-                suggestedName: nil
+                suggestedName: pendingName
             )
+            
+            if pendingName != nil {
+                UserDefaults.standard.removeObject(forKey: "pending_signup_name_\(email)")
+            }
 
             await MainActor.run {
                 self.setCurrentUser(user)
